@@ -8,6 +8,8 @@ Como funcionário, quero me autenticar para consultar informações e trabalhar 
 
 Requisitos: RF17, RNF05.
 
+Critérios de aceitação:
+
 - Credenciais válidas permitem acessar as funções internas.
 - Sem autenticação, consultas e alterações internas são rejeitadas.
 
@@ -16,6 +18,8 @@ Requisitos: RF17, RNF05.
 Como funcionário, quero receber uma análise da mensagem para entender a demanda e suas pendências antes de decidir.
 
 Requisitos: RF02, RF03, RF04, RF11, RF12; RN07, RN08.
+
+Critérios de aceitação:
 
 - A entrada preserva identificador, mensagem original, remetente, canal e data de recebimento.
 - O cartão apresenta o resumo, o tipo, a urgência justificada e as pendências. Sua expansão abre a conversa iniciada pela análise do agente e permite conferir a mensagem original.
@@ -27,6 +31,8 @@ Como funcionário, quero discutir os pontos incertos com o assistente para compl
 
 Requisitos: RF01, RF07, RF10, RF13; RN03, RN06.
 
+Critérios de aceitação:
+
 - Produto indefinido, quantidade agregada ou data conflitante gera uma pergunta específica, preservando as informações já compreendidas.
 - Ao receber o esclarecimento, o assistente atualiza a análise, a sugestão e os alertas afetados, mantendo a mensagem original.
 - Perguntas de acompanhamento usam o contexto daquela conversa, sem incorporar dados de outra solicitação.
@@ -37,6 +43,8 @@ Como funcionário, quero conhecer os produtores candidatos para comparar alterna
 
 Requisitos: RF14; RN01 a RN04, RN11.
 
+Critérios de aceitação:
+
 - A sugestão identifica candidatos, fontes, quantidades justificáveis e disponibilidade ainda não confirmada.
 - Produtores inaptos são excluídos da sugestão para aquele atendimento, com indicação do motivo. Dados ausentes ou conflitantes aparecem como pendências.
 - O funcionário pode discutir alternativas no chat. Alterar a sugestão não registra uma alocação.
@@ -46,6 +54,8 @@ Requisitos: RF14; RN01 a RN04, RN11.
 Como funcionário, quero confirmar produtores e quantidades por item para definir o atendimento e alimentar os resumos dos produtores.
 
 Requisitos: RF15; RN02, RN09; RNF03.
+
+Critérios de aceitação:
 
 - A confirmação registra pedido, item, produtor, quantidade, unidade e funcionário responsável, após confirmação de disponibilidade.
 - Um item de 30 kg pode ser dividido em 20 kg para um produtor e 10 kg para outro. Uma atribuição de 20 kg mantém 10 kg sem alocação.
@@ -58,6 +68,8 @@ Como funcionário, quero consultar a situação das solicitações para identifi
 
 Requisitos: RF12, RF16; RN11.
 
+Critérios de aceitação:
+
 - A solicitação apresenta um dos estados definidos no RF16 e as pendências existentes.
 - Sem fornecedor apto, a análise explica o motivo. O funcionário pode buscar esclarecimentos ou encerrar sem atendimento.
 - O encerramento registra atendimento definido, parcial, sem atendimento ou consulta respondida. A situação da alocação permanece distinguível do estado da triagem.
@@ -67,6 +79,8 @@ Requisitos: RF12, RF16; RN11.
 Como funcionário, quero fazer perguntas sobre os registros da cooperativa para responder às demandas com fontes verificáveis.
 
 Requisitos: RF01, RF05, RF06, RF07; RN01, RN05; RNF06.
+
+Critérios de aceitação:
 
 - A consulta pode combinar documentos e dados operacionais na mesma conversa.
 - A resposta identifica documentos e registros ou trechos que sustentam as afirmações. Consultas sobre certificação verificam validade e produto coberto; consultas sobre lote identificam sua origem registrada.
@@ -78,6 +92,8 @@ Como funcionário, quero gerar um resumo por produtor para informar suas vendas,
 
 Requisitos: RF08; RN03, RN10; RNF04.
 
+Critérios de aceitação:
+
 - O resumo identifica produtor, período e data de referência, com fontes dos valores e registros apresentados.
 - Vendas do período e pagamentos registrados aparecem separados das pendências vencidas e a vencer, inclusive quando originadas em períodos anteriores. Quantidades respeitam produto e unidade.
 - Pedidos alocados incluem apenas atribuições confirmadas. Ausência de registro é informada como tal; pagamento registrado não é apresentado como comprovação de repasse bancário.
@@ -87,6 +103,8 @@ Requisitos: RF08; RN03, RN10; RNF04.
 Como funcionário, quero solicitar uma notificação para um produtor para comunicar uma demanda com clareza.
 
 Requisitos: RF09; RN12.
+
+Critérios de aceitação:
 
 - O texto identifica o produtor, os produtos, as quantidades e os prazos conhecidos, indicando o que ainda precisa de confirmação.
 - Uma consulta de disponibilidade é distinta de uma comunicação de alocação confirmada.
@@ -98,6 +116,8 @@ Como funcionário, quero reencontrar as solicitações e suas conversas para con
 
 Requisitos: RF10; RNF01.
 
+Critérios de aceitação:
+
 - Após reabrir a aplicação e se autenticar, o funcionário encontra mensagens, análises, conversas e alocações preservadas.
 - Ao retomar uma conversa, o assistente considera seus esclarecimentos anteriores e mantém o contexto separado das demais solicitações.
 
@@ -106,6 +126,8 @@ Requisitos: RF10; RNF01.
 Como funcionário, quero saber quando uma operação falhou e poder tentar novamente para continuar o atendimento.
 
 Requisitos: RNF02, RNF03.
+
+Critérios de aceitação:
 
 - A interface indica processamento e informa falhas. Sem conclusão após 60 segundos, informa a demora e oferece nova tentativa.
 - A solicitação permanece disponível. Uma nova tentativa não duplica registros; uma alteração rejeitada mantém o registro anterior.
