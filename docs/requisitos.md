@@ -54,9 +54,11 @@ Resumos e notificações são apresentados em texto, com possibilidade de cópia
 | RN07 | Classificar como pedido de compra, cotação ou consulta de fornecimento, consulta documental, consulta financeira, oferta de produtor, comunicação administrativa ou não identificado. Preservar intenções adicionais da mesma mensagem. |
 | RN08 | Sinalizar urgência declarada ou entrega para o dia do recebimento ou o seguinte, indicando o motivo. Usar normal quando houver prazo posterior sem urgência declarada e indeterminada quando faltarem elementos. Sinalizar prazo vencido separadamente. |
 | RN09 | Permitir dividir um item entre produtores e registrar atendimento parcial. As quantidades alocadas devem ser positivas, usar unidade compatível e não exceder a quantidade solicitada. A disponibilidade deve ser confirmada pelo funcionário antes da alocação. |
-| RN10 | Apurar vendas pela data das transações no período solicitado. Separar pagamentos registrados, pendências vencidas e a vencer na data de referência, incluindo dívidas de períodos anteriores. O registro de pagamento não comprova repasse bancário ao produtor. |
+| RN10 | Usar a data das transações para apurar vendas e a previsão de fornecimento para selecionar alocações no período solicitado. Separar pagamentos registrados, pendências vencidas e a vencer na data de referência, incluindo dívidas de períodos anteriores. O registro de pagamento não comprova repasse bancário ao produtor. |
 | RN11 | Sem fornecedor apto ou dados suficientes, apresentar o motivo e manter a pendência para decisão do funcionário. Alternativas não podem substituir silenciosamente os itens solicitados. O funcionário pode encerrar a solicitação sem atendimento. |
 | RN12 | Notificações devem distinguir consulta de disponibilidade de alocação confirmada. Uma sugestão não pode ser comunicada como compromisso de fornecimento. |
+| RN13 | Alocar apenas atendimentos com data ou período de fornecimento definido. Em demandas recorrentes, esclarecer qual atendimento será alocado, sem gerar entregas seguintes automaticamente. |
+| RN14 | Impedir alterações do pedido que invalidem alocações confirmadas. Informar o motivo e exigir que o funcionário ajuste ou retire as alocações afetadas antes de aplicar a alteração. |
 
 Nas consultas sem uma data informada, usar a data de recebimento e explicitá-la na resposta. A ausência de registros deve ser apresentada como informação não encontrada, sem concluir que o fato nunca ocorreu. As restrições sanitárias e documentais adotadas pertencem ao cenário simulado.
 
@@ -66,7 +68,7 @@ Nas consultas sem uma data informada, usar a data de recebimento e explicitá-la
 | --- | --- |
 | RNF01 | Preservar mensagens, conversas, análises e alocações após fechar e reabrir a aplicação. Verificar que a retomada mantém os dados e separa o contexto de cada solicitação. |
 | RNF02 | Indicar processamento em andamento. Após 60 segundos sem conclusão, informar a demora e permitir nova tentativa, preservando a solicitação. Verificar também o tratamento de falha do modelo ou das consultas. |
-| RNF03 | Evitar duplicação de solicitações e alocações em novas tentativas da mesma operação. Uma alteração rejeitada deve preservar o registro anterior. |
+| RNF03 | Evitar duplicação de solicitações e alocações em novas tentativas da mesma operação. Uma alteração rejeitada deve preservar o registro anterior. Resultados de tentativas anteriores não podem sobrescrever análises ou esclarecimentos mais recentes. |
 | RNF04 | Executar cálculos financeiros sobre os registros selecionados e conferir os resultados com valores esperados. A redação pelo modelo deve preservar esses resultados. |
 | RNF05 | Proteger consultas e operações internas com validação de tokens JWT, rejeitando acessos sem token válido. |
 | RNF06 | Disponibilizar os dados e documentos fornecidos por uma preparação inicial reproduzível, preservando originais, identificadores e fontes. Repetir a carga não deve duplicar registros nem preencher lacunas com dados fictícios adicionais. |

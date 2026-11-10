@@ -29,12 +29,13 @@ Critérios de aceitação:
 
 Como funcionário, quero discutir os pontos incertos com o assistente para completar a análise sem adivinhar a intenção do remetente.
 
-Requisitos: RF01, RF07, RF10, RF13; RN03, RN06.
+Requisitos: RF01, RF07, RF10, RF13; RN03, RN06, RN14.
 
 Critérios de aceitação:
 
 - Produto indefinido, quantidade agregada ou data conflitante gera uma pergunta específica, preservando as informações já compreendidas.
-- Ao receber o esclarecimento, o assistente atualiza a análise, a sugestão e os alertas afetados, mantendo a mensagem original.
+- O assistente registra o esclarecimento na conversa e preserva a mensagem original. Ao aplicar a alteração, atualiza a análise, a sugestão e os alertas afetados.
+- Se a alteração invalidar alocações confirmadas, o sistema informa o motivo e mantém os dados do pedido até o funcionário ajustar ou retirar as alocações afetadas.
 - Perguntas de acompanhamento usam o contexto daquela conversa, sem incorporar dados de outra solicitação.
 
 ## US04 - Avaliar uma sugestão de atendimento
@@ -53,11 +54,12 @@ Critérios de aceitação:
 
 Como funcionário, quero confirmar produtores e quantidades por item para definir o atendimento e alimentar os resumos dos produtores.
 
-Requisitos: RF15; RN02, RN09; RNF03.
+Requisitos: RF15; RN02, RN09, RN13; RNF03.
 
 Critérios de aceitação:
 
-- A confirmação registra pedido, item, produtor, quantidade, unidade e funcionário responsável, após confirmação de disponibilidade.
+- A confirmação registra pedido, item, produtor, quantidade, unidade, data ou período previsto de fornecimento e funcionário responsável, após confirmação de disponibilidade.
+- Em uma demanda de 50 kg por semana, a confirmação atende apenas a semana definida com o funcionário e não gera entregas seguintes.
 - Um item de 30 kg pode ser dividido em 20 kg para um produtor e 10 kg para outro. Uma atribuição de 20 kg mantém 10 kg sem alocação.
 - Restrições aplicáveis e quantidades incompatíveis impedem a confirmação, conforme RN02 e RN09.
 - Alterar ou retirar uma atribuição atualiza o saldo sem alocação e os resumos seguintes. Repetir a mesma operação não duplica a atribuição.
@@ -96,7 +98,8 @@ Critérios de aceitação:
 
 - O resumo identifica produtor, período e data de referência, com fontes dos valores e registros apresentados.
 - Vendas do período e pagamentos registrados aparecem separados das pendências vencidas e a vencer, inclusive quando originadas em períodos anteriores. Quantidades respeitam produto e unidade.
-- Pedidos alocados incluem apenas atribuições confirmadas. Ausência de registro é informada como tal; pagamento registrado não é apresentado como comprovação de repasse bancário.
+- Pedidos alocados incluem apenas atribuições confirmadas, selecionadas pela data ou pelo período previsto de fornecimento. Quando um intervalo não permitir determinar a quantidade no período consultado, o resumo informa essa limitação.
+- Ausência de registro é informada como tal; pagamento registrado não é apresentado como comprovação de repasse bancário.
 
 ## US09 - Preparar uma notificação
 
@@ -131,3 +134,4 @@ Critérios de aceitação:
 
 - A interface indica processamento e informa falhas. Sem conclusão após 60 segundos, informa a demora e oferece nova tentativa.
 - A solicitação permanece disponível. Uma nova tentativa não duplica registros; uma alteração rejeitada mantém o registro anterior.
+- Uma resposta atrasada de uma tentativa anterior não substitui análises ou esclarecimentos mais recentes.
