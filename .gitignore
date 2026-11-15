@@ -1,0 +1,25 @@
+# Python, uv e testes
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# React e Vite
+node_modules/
+/frontend/dist/
+/frontend/coverage/
+*.tsbuildinfo
+npm-debug.log*
+
+# Variáveis de ambiente locais
+.env
+.env.*
+!.env.example
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
