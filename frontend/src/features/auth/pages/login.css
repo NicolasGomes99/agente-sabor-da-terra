@@ -1,0 +1,91 @@
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 1.5rem;
+  background: radial-gradient(
+    ellipse at 50% 40%,
+    #eaf3ee 0,
+    var(--color-background) 64%
+  );
+}
+
+.login-card {
+  width: min(100%, 25.625rem);
+  padding: 2.125rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.login-brand {
+  margin-bottom: 0.5625rem;
+  color: var(--color-primary);
+  font-size: 0.9375rem;
+  font-weight: 750;
+}
+
+.login-card h1 {
+  margin-bottom: 0.625rem;
+  color: var(--color-text);
+  font-size: 1.6875rem;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+}
+
+.login-description {
+  margin-bottom: 1.5rem;
+  color: var(--color-text-muted);
+}
+
+.login-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.login-field {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.login-field label {
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.login-submit {
+  min-height: 2.5rem;
+  margin-top: 0.25rem;
+  padding: 0.4375rem 0.8125rem;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-surface);
+  font-weight: 650;
+}
+
+.login-submit:hover:not(:disabled) {
+  border-color: var(--color-primary-dark);
+  background: var(--color-primary-dark);
+}
+
+.login-error {
+  margin: 0;
+  padding: 0.6875rem 0.875rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 30rem) {
+  .login-page {
+    padding: 1rem;
+  }
+
+  .login-card {
+    padding: 1.5rem;
+  }
+}
