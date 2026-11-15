@@ -3,5 +3,7 @@ Projeto da formação em Agentes de IA da Sauter em parceria com a UPE. O assist
 
 - [Requisitos](docs/requisitos.md)
 - [Histórias de usuário](docs/user-stories.md)
+- [Banco de dados](docs/banco-de-dados.md)
+- [Infraestrutura](docs/infra.md)
 - [Integrações de mensagens](docs/intregrations.md)
 - [Roteiro do protótipo navegável](docs/prototype/README.md)

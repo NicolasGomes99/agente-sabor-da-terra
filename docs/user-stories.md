@@ -1,6 +1,6 @@
 # User stories
 
-O usuário é o funcionário da cooperativa. As referências RF, RN e RNF apontam para [Requisitos](requisitos.md).
+O usuário é o funcionário da cooperativa. As referências RF e RNF apontam para [Requisitos](requisitos.md).
 
 ## US01 - Acessar a plataforma
 
@@ -17,26 +17,26 @@ Critérios de aceitação:
 
 Como funcionário, quero receber uma análise da mensagem para entender a demanda e suas pendências antes de decidir.
 
-Requisitos: RF02, RF03, RF04, RF11, RF12, RF15, RF25; RN06 a RN08, RN16; RNF03, RNF06, RNF07.
+Requisitos: RF02, RF03, RF04, RF11, RF12, RF15, RF25; RNF03, RNF06, RNF07.
 
 Critérios de aceitação:
 
 - As 15 mensagens enviadas pelo script de apresentação entram na mesma fila e passam pelo mesmo fluxo de triagem que as mensagens dos canais integrados. Reexecutar o script mantém um único registro por mensagem.
 - O sistema preserva o texto original, o remetente, o canal e a data de recebimento de cada mensagem, além do identificador de origem quando disponível. Uma nova entrega da mesma mensagem pelo canal integrado mantém um único registro.
 - O sistema, ao receber um novo pedido como resposta direta a uma mensagem de outra solicitação ainda não finalizada do mesmo contato, cria uma solicitação separada e preserva a anterior.
-- O sistema registra na solicitação ainda não finalizada a resposta que dá continuidade à demanda e tem vínculo inequívoco. Atualiza a análise e as pendências e preserva o estado do cartão. O sistema abre nova triagem quando o vínculo é incerto ou a solicitação anterior está finalizada.
+- O sistema registra na conversa da solicitação ainda não finalizada a resposta que dá continuidade à demanda e tem vínculo inequívoco. Atualiza a análise, as pendências e os dados do cartão afetados pela resposta. A análise inicial e o estado do atendimento são preservados. O sistema abre nova triagem quando o vínculo é incerto ou a solicitação anterior está finalizada.
 - O sistema, se o Telegram estiver integrado, registra separadamente duas mensagens com o mesmo `message_id` em chats diferentes do mesmo bot. O sistema, ao receber uma reentrega de uma delas, reaproveita apenas o registro do chat correspondente.
-- O cartão apresenta o resumo, o tipo, a urgência justificada e as pendências.
-- O funcionário pode abrir o chat pelo cartão para consultar a análise inicial assim que estiver disponível e ver o histórico ao voltar à conversa. Se a solicitação tiver mensagens recebidas, o funcionário pode consultar o texto original pelo chat.
+- O cartão apresenta o resumo, o tipo, a urgência e o estado atual do atendimento.
+- O funcionário pode abrir o chat pelo cartão para consultar a análise inicial, o motivo da urgência e as pendências identificadas. Ao voltar à conversa, pode consultar o histórico. Se a solicitação tiver mensagens recebidas, pode consultar o texto original de cada uma.
 - A análise organiza os dados extraídos e preserva condições como "se tiver", a frequência de fornecimento e intenções adicionais, como uma oferta acompanhada de solicitação de cadastro.
 - O assistente interpreta a mensagem PED-2026-011 em inglês e apresenta a triagem em português.
-- Ao consultar o PED-2026-003 em novembro, o cartão mantém 29/10 como data de entrega solicitada e indica que o prazo venceu.
+- Ao abrir o chat do PED-2026-003 em novembro, o funcionário pode consultar 29/10 como a data de entrega interpretada na triagem.
 
 ## US03 - Esclarecer ambiguidades
 
 Como funcionário, quero discutir os pontos incertos com o assistente para completar a análise sem adivinhar a intenção do remetente.
 
-Requisitos: RF01, RF07, RF10, RF13; RN03, RN06.
+Requisitos: RF01, RF07, RF10, RF13.
 
 Critérios de aceitação:
 
@@ -49,7 +49,7 @@ Critérios de aceitação:
 
 Como funcionário, quero conhecer os produtores candidatos para comparar alternativas de atendimento.
 
-Requisitos: RF06, RF14, RF22, RF26, RF27; RN01 a RN04, RN10, RN13, RN23.
+Requisitos: RF03, RF06, RF14, RF22, RF26, RF27.
 
 Critérios de aceitação:
 
@@ -64,11 +64,11 @@ Critérios de aceitação:
 
 Como funcionário, quero consultar a situação das solicitações para identificar o que ainda depende de decisão.
 
-Requisitos: RF12, RF15; RN10.
+Requisitos: RF12, RF15, RF25.
 
 Critérios de aceitação:
 
-- Na fila de triagem, o funcionário vê o estado atual de cada solicitação e as pendências existentes.
+- Na fila de triagem, o funcionário vê o estado atual de cada solicitação. As pendências ficam disponíveis no chat da solicitação.
 - Uma solicitação nova aparece como `recebida`. Quando o funcionário abre o cartão pela primeira vez, o sistema muda o estado para `em análise`.
 - Sem fornecedor apto, a análise explica o motivo. O funcionário pode buscar esclarecimentos ou encerrar sem atendimento.
 - Quando o funcionário encerra o atendimento, o sistema muda o estado da solicitação para `finalizada`.
@@ -77,7 +77,7 @@ Critérios de aceitação:
 
 Como funcionário, quero fazer perguntas sobre os registros da cooperativa para responder às demandas com fontes verificáveis.
 
-Requisitos: RF01, RF05, RF06, RF07, RF17; RN01, RN03, RN05, RN06; RNF06.
+Requisitos: RF01, RF05, RF06, RF07, RF17; RNF06.
 
 Critérios de aceitação:
 
@@ -92,7 +92,7 @@ Critérios de aceitação:
 
 Como funcionário, quero gerar e baixar em PDF um resumo por produtor para informar suas vendas, pedidos alocados e pendências financeiras.
 
-Requisitos: RF08, RF18, RF22; RN03, RN09, RN14; RNF04.
+Requisitos: RF08, RF18, RF22; RNF04.
 
 Critérios de aceitação:
 
@@ -107,16 +107,16 @@ Critérios de aceitação:
 
 Como funcionário, quero preparar e enviar uma notificação para comunicar uma demanda ao produtor.
 
-Requisitos: RF09, RF34 a RF36; RN11, RN14, RN17, RN21, RN22.
+Requisitos: RF09, RF19, RF34 a RF36, RF40.
 
 Critérios de aceitação:
 
 - O rascunho identifica o produtor, os produtos, as quantidades e os prazos conhecidos e indica o que ainda precisa de confirmação.
-- O sistema permite enviar uma consulta de disponibilidade sem alocação confirmada se as condições da RN17 forem atendidas. O sistema aplica as verificações da RN22 quando o texto revisado confirma um compromisso de fornecimento.
+- O sistema permite enviar uma consulta de disponibilidade sem alocação confirmada, respeitando as condições de envio do RF40. Se o texto revisado confirmar um compromisso de fornecimento, o sistema valida o compromisso na confirmação e antes de cada tentativa.
 - A notificação só comunica uma alocação futura como confirmada se os dados atuais comprovarem a aptidão do produtor. Se faltar comprovação obrigatória, a aplicação sinaliza a pendência para revisão.
 - O funcionário pode editar e copiar o texto e escolher um canal integrado.
 - O sistema mostra o destinatário e o canal da notificação para o funcionário conferir antes de confirmar.
-- Na demonstração, o envio fica disponível apenas para destinos de teste que a equipe vinculou ao produtor. Se faltar destino válido ou o canal impedir o envio, a aplicação informa o motivo e oferece a cópia do rascunho conforme a RN21.
+- Na demonstração, o envio fica disponível apenas para destinos de teste que a equipe vinculou ao produtor. Se faltar destino válido ou o canal impedir o envio, a aplicação informa o motivo e oferece a cópia do rascunho conforme o RF34.
 - O sistema só envia a versão revisada após a confirmação explícita do funcionário.
 - O assistente deixa dados pessoais ou bancários das fontes fora do texto da notificação e da versão copiável até o funcionário autorizar os dados específicos para aquele destinatário.
 - O sistema registra em uma mensagem no chat o texto autorizado, o funcionário que confirmou, o destinatário, o canal e o resultado do envio.
@@ -138,12 +138,12 @@ Critérios de aceitação:
 
 Como funcionário, quero saber quando uma operação falhou e poder tentar novamente para continuar o atendimento.
 
-Requisitos: RF36; RN18; RNF02, RNF03, RNF08 a RNF10.
+Requisitos: RF36, RF40; RNF02, RNF03, RNF08 a RNF10.
 
 Critérios de aceitação:
 
-- A interface indica processamento e informa falhas. Após 60 segundos sem conclusão, informa a demora. Para envios, só oferece nova tentativa após falha confirmada, conforme a RN18. Nas demais operações, oferece nova tentativa após o aviso de demora.
-- A solicitação permanece disponível. Repetir a mesma operação mantém um único registro, inclusive na confirmação de pedidos e agendamentos pelo chat, na geração de ocorrências e no cadastro de alocações. Uma alteração rejeitada mantém o registro anterior.
+- A interface indica processamento e informa falhas. Após 60 segundos sem conclusão, informa a demora. Para envios, só oferece nova tentativa após falha confirmada. Nas demais operações, oferece nova tentativa após o aviso de demora.
+- Se a triagem falhar antes de criar o cartão, o funcionário pode tentar novamente a partir da entrada registrada. Se a solicitação já tiver sido criada, ela permanece disponível. Repetir a mesma operação mantém um único registro, inclusive na confirmação de pedidos e agendamentos pelo chat, na geração de ocorrências e no cadastro de alocações. Uma alteração rejeitada mantém o registro anterior.
 - O resultado atrasado de uma tentativa anterior não substitui análises ou esclarecimentos mais recentes.
 - O sistema aciona no máximo uma tentativa ao receber a mesma confirmação mais de uma vez ou duas confirmações simultâneas da mesma versão do rascunho para o mesmo destinatário e canal. O sistema, após um envio bem-sucedido, bloqueia nova tentativa dessa versão para o mesmo destinatário e canal.
 - O sistema mantém o reenvio bloqueado durante a tentativa. Se a tentativa terminar sem confirmação do resultado, a mensagem de envio no chat mostra "Resultado incerto" e explica que reenviar pode duplicar a mensagem. O reenvio fica bloqueado mesmo se o funcionário editar o rascunho. Se o canal confirmar o resultado mais tarde, o sistema atualiza a mensagem no chat.
@@ -153,7 +153,7 @@ Critérios de aceitação:
 
 Como funcionário, quero gerenciar os documentos da base para que o assistente possa consultá-los e citá-los nas respostas.
 
-Requisitos: RF28, RF29, RF38; RN19; RNF06.
+Requisitos: RF28, RF29, RF38; RNF06.
 
 Critérios de aceitação:
 
@@ -166,7 +166,7 @@ Critérios de aceitação:
 
 Como funcionário, quero gerenciar os pedidos da cooperativa para acompanhar as demandas cadastradas.
 
-Requisitos: RF19; RN14.
+Requisitos: RF19, RF39.
 
 Critérios de aceitação:
 
@@ -179,7 +179,7 @@ Critérios de aceitação:
 
 Como funcionário, quero revisar e confirmar um pedido no chat para registrá-lo na gestão de pedidos.
 
-Requisitos: RF19, RF20, RF30 a RF32; RN16, RN20; RNF03.
+Requisitos: RF19, RF20, RF30 a RF32, RF39; RNF03.
 
 Critérios de aceitação:
 
@@ -195,7 +195,7 @@ Critérios de aceitação:
 
 Como funcionário, quero agendar pedidos para que cada ocorrência entre na triagem com a antecedência definida.
 
-Requisitos: RF21, RF24, RF30, RF31, RF33; RN15, RN27; RNF03.
+Requisitos: RF21, RF24, RF30, RF31, RF33; RNF03.
 
 Critérios de aceitação:
 
@@ -214,7 +214,7 @@ Critérios de aceitação:
 
 Como funcionário, quero gerenciar as alocações de cada item do pedido para registrar quem atenderá a demanda.
 
-Requisitos: RF19, RF22; RN03, RN12 a RN14, RN24 a RN26.
+Requisitos: RF19, RF22.
 
 Critérios de aceitação:
 
@@ -229,16 +229,16 @@ Critérios de aceitação:
 
 Como funcionário, quero revisar uma resposta para esclarecer a solicitação ou informar o resultado da triagem ao remetente.
 
-Requisitos: RF23, RF34 a RF37; RN11, RN17, RN21, RN22.
+Requisitos: RF23, RF34 a RF37, RF40.
 
 Critérios de aceitação:
 
 - O assistente, a pedido do funcionário, prepara um rascunho de resposta. O funcionário pode editar e copiar o texto. Para as mensagens enviadas pelo script da apresentação, a aplicação oferece apenas revisão e cópia da resposta.
 - O assistente, quando o remetente pede documentos, dados pessoais ou dados bancários, avisa o funcionário. O assistente lista, no aviso do PED-2026-009, os documentos e dados cadastrais solicitados.
 - O assistente, ao responder a uma nova consulta integrada sobre a validade de uma certificação cuja fonte contém CPF, informa a validade e deixa o CPF fora do rascunho e da versão copiável. O assistente inclui somente os dados específicos que o funcionário autorizar para aquele destinatário.
-- O sistema bloqueia a cópia e o envio se o funcionário incluir um CPF ao editar o rascunho e ainda não tiver autorizado o compartilhamento desse dado com o destinatário. O sistema libera a cópia após essa autorização e aplica a RN17 ao envio.
-- O sistema só oferece o envio de respostas a mensagens recebidas pela integração quando há um destino válido e o canal permite o envio, conforme a RN17.
+- O sistema bloqueia a cópia e o envio se o funcionário incluir um CPF ao editar o rascunho e ainda não tiver autorizado o compartilhamento desse dado com o destinatário. O sistema libera a cópia após essa autorização e aplica as condições de envio do RF40.
+- O sistema só oferece o envio de respostas a mensagens recebidas pela integração quando há um destino válido e o canal permite o envio.
 - O sistema mostra o destinatário e o canal para o funcionário conferir antes de confirmar. O sistema envia o texto revisado pelo canal de origem após a confirmação explícita do funcionário.
 - O sistema bloqueia, antes do disparo, uma resposta que confirma ao comprador o fornecimento de 30 unidades quando as alocações vigentes cobrem apenas 20. O sistema informa o motivo do bloqueio.
-- Quando o canal de origem não está integrado, falta um destino válido ou o canal impede o envio, a aplicação informa o motivo e oferece a cópia da resposta conforme a RN21.
+- Quando o canal de origem não está integrado, falta um destino válido ou o canal impede o envio, a aplicação informa o motivo e oferece a cópia da resposta conforme o RF34.
 - O sistema registra em uma mensagem no chat o texto autorizado, o funcionário que confirmou, o destinatário, o canal e o resultado do envio.
