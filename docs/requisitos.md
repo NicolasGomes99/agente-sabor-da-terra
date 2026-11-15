@@ -4,9 +4,9 @@
 
 O assistente é de uso interno da cooperativa fictícia Sabor da Terra. Ele analisa as solicitações que entram na triagem, responde a consultas sobre documentos e dados operacionais com indicação das fontes e prepara resumos e notificações para produtores a pedido dos funcionários. Os funcionários conduzem o atendimento a compradores, produtores e auditores e autorizam as respostas e notificações antes do envio pela aplicação.
 
-A aplicação também permite à equipe manter os cadastros de produtores, produtos e documentos, gerenciar pedidos e agendamentos semanais e registrar alocações de produtores por item do pedido.
+A equipe consulta os dados e documentos da base fornecida pelo chat. A aplicação permite gerenciar pedidos e agendamentos semanais e registrar alocações de produtores por item do pedido.
 
-No cenário do enunciado, a cooperativa recebe de 60 a 100 pedidos por dia por e-mail, formulário web e mensagens de texto. Para a demonstração, a aplicação integra e-mail e WhatsApp, com Telegram como alternativa ao WhatsApp.
+No cenário do enunciado, a cooperativa recebe de 60 a 100 pedidos por dia por e-mail, formulário web e mensagens de texto. Para a demonstração, a aplicação integra e-mail e WhatsApp.
 
 Os critérios de aceitação estão nas [histórias de usuário](user-stories.md).
 
@@ -28,34 +28,30 @@ Os critérios de aceitação estão nas [histórias de usuário](user-stories.md
 | RF12 | O sistema deve apresentar cada solicitação em um cartão com resumo, classificação e pendências. |
 | RF13 | O assistente deve fazer perguntas ao funcionário para esclarecer ambiguidades e atualizar a análise com as respostas, preservando a mensagem original. |
 | RF14 | O assistente deve sugerir no chat produtores que possam atender ao pedido. |
-| RF15 | O sistema deve mostrar o estado de cada solicitação na fila de triagem. A solicitação entra como recebida e passa para em análise quando o assistente começa a analisá-la. Ao concluir ou atualizar a análise, o sistema deve marcar a solicitação como aguardando informações se faltar algum dado para decidir ou como pronta para decisão se já for possível decidir, inclusive quando o atendimento for inviável. O funcionário decide quando encerrar a solicitação. No encerramento, o sistema deve registrar o resultado da triagem e as pendências restantes. |
+| RF15 | O sistema deve mostrar no cartão o estado da solicitação. A solicitação fica recebida até o funcionário abrir o cartão pela primeira vez, passa para em análise na abertura e fica finalizada quando o funcionário encerra o atendimento. |
 | RF16 | O funcionário deve se autenticar para acessar o sistema. |
-| RF17 | O funcionário deve poder ler o documento completo e baixar o arquivo original usado na resposta. A citação continua apontando para esse arquivo após a substituição do documento no cadastro. |
+| RF17 | O funcionário deve poder ler o documento completo e baixar o arquivo original usado na resposta. |
 | RF18 | O sistema deve oferecer a opção "Baixar resumo em PDF" junto a cada resumo por produtor, preservando o conteúdo e as fontes apresentados. |
-| RF19 | O funcionário deve poder cadastrar, consultar, editar e excluir registros de produtores, produtos e documentos. |
-| RF20 | O funcionário deve poder criar, consultar, editar e cancelar pedidos. O sistema deve salvar o prazo de entrega como data única ou intervalo de datas, conforme o funcionário confirmar. |
-| RF21 | O assistente deve preparar no chat um rascunho de pedido com comprador, itens, quantidades, unidades, prazo e condições de atendimento. O rascunho deve manter a data ou o intervalo de entrega informado pelo comprador. O horário pode ficar nas condições de entrega. |
-| RF22 | O funcionário deve poder cadastrar, consultar, editar e cancelar agendamentos semanais. |
-| RF23 | O funcionário deve poder cadastrar, consultar, editar e excluir alocações por item do pedido. Cada alocação deve indicar o produtor, a quantidade e a unidade. |
-| RF24 | O assistente, a pedido do funcionário, deve preparar um rascunho de resposta ao remetente. |
-| RF25 | O sistema, ao salvar um agendamento semanal, deve registrar o comprador, os itens, as quantidades, as unidades, as condições de atendimento confirmadas pelo funcionário, a primeira data de fornecimento e a antecedência da triagem em dias corridos. |
-| RF26 | O sistema deve usar o mesmo fluxo de triagem para as mensagens dos canais integrados e as mensagens da amostra. |
-| RF27 | O sistema deve preservar o texto original, o remetente, o canal e a data de recebimento de cada mensagem, além do identificador de origem quando disponível. |
-| RF28 | O sistema deve marcar na lista de triagem as mensagens da amostra. |
-| RF29 | O funcionário deve poder abrir o chat da solicitação a partir do cartão. No chat, deve poder consultar a análise inicial do assistente, o histórico da conversa e o texto original das mensagens recebidas, quando houver. |
-| RF30 | O assistente, ao sugerir um produtor, deve informar a capacidade estimada para o produto quando houver dados suficientes. A sugestão deve indicar a unidade, o período e a fonte da estimativa. |
-| RF31 | O assistente deve indicar na sugestão o que o funcionário ainda precisa confirmar sobre a disponibilidade do produtor. |
-| RF32 | Ao sugerir atendimento para um pedido cadastrado, o assistente deve considerar, para cada item, a quantidade solicitada menos a quantidade já alocada. |
-| RF33 | Ao bloquear uma exclusão, o sistema deve informar ao funcionário qual vínculo impede a operação. |
-| RF34 | O assistente deve usar os dados atuais dos cadastros nas consultas e sugestões de atendimento. |
-| RF35 | Ao salvar um pedido, o sistema deve registrar cada condição de atendimento que o funcionário confirmou e indicar se ela vale para todo o pedido ou para itens específicos. |
-| RF37 | O funcionário deve poder revisar e editar no chat os rascunhos de pedidos e agendamentos. |
-| RF38 | O sistema deve cadastrar a versão revisada do pedido ou do agendamento após a confirmação explícita do funcionário no chat. Para pedidos, deve usar a mesma operação do cadastro direto. Quando o cadastro do pedido partir da triagem, o sistema deve vinculá-lo à solicitação de origem e permitir que o funcionário abra o pedido pelo chat dessa solicitação. |
-| RF39 | O assistente deve preparar no chat um rascunho de agendamento semanal com os campos definidos no RF25. |
-| RF40 | O funcionário deve poder editar o texto dos rascunhos de respostas e notificações e copiá-lo conforme a RN21. |
-| RF41 | O sistema, quando o envio estiver disponível, deve mostrar o destinatário e o canal para o funcionário conferir antes de confirmar. |
-| RF42 | O sistema deve registrar no histórico o texto autorizado, o funcionário que confirmou o envio, o destinatário, o canal e o resultado do envio. |
-| RF43 | O assistente, quando o remetente pedir documentos, dados pessoais ou dados bancários, deve avisar o funcionário e indicar o que foi solicitado. |
+| RF19 | O funcionário deve poder criar, consultar, editar e cancelar pedidos. O sistema deve salvar o prazo de entrega como data única ou intervalo de datas, conforme o funcionário confirmar. |
+| RF20 | O assistente deve preparar no chat um rascunho de pedido com comprador, itens, quantidades, unidades, prazo e condições de atendimento. O rascunho deve manter a data ou o intervalo de entrega informado pelo comprador. O horário pode ficar nas condições de entrega. |
+| RF21 | O funcionário deve poder cadastrar, consultar, editar e cancelar agendamentos semanais. |
+| RF22 | O funcionário deve poder cadastrar, consultar, editar e excluir alocações por item do pedido. Cada alocação deve indicar o produtor, a quantidade e a unidade. |
+| RF23 | O assistente, a pedido do funcionário, deve preparar um rascunho de resposta ao remetente. |
+| RF24 | O sistema, ao salvar um agendamento semanal, deve registrar o comprador, os itens, as quantidades, as unidades, as condições de atendimento confirmadas pelo funcionário, a primeira data de fornecimento e a antecedência da triagem em dias corridos. |
+| RF25 | O funcionário deve poder abrir o chat da solicitação a partir do cartão. No chat, deve poder consultar a análise inicial do assistente e o texto original das mensagens recebidas. |
+| RF26 | O assistente deve indicar na sugestão o que o funcionário ainda precisa confirmar sobre a disponibilidade do produtor. |
+| RF27 | Ao sugerir atendimento para um pedido cadastrado, o assistente deve considerar, para cada item, a quantidade solicitada menos a quantidade já alocada. |
+| RF28 | Ao bloquear uma exclusão, o sistema deve informar ao funcionário qual vínculo impede a operação. |
+| RF29 | O sistema deve disponibilizar os documentos adicionados pela aplicação para consulta e citação pelo assistente após o processamento. |
+| RF30 | O funcionário deve poder revisar e editar no chat os rascunhos de pedidos e agendamentos. |
+| RF31 | O sistema deve cadastrar a versão revisada do pedido ou do agendamento após a confirmação explícita do funcionário no chat. O sistema deve usar a mesma operação para cadastrar pedidos pelo chat e pelo cadastro direto. |
+| RF32 | O sistema deve vincular o pedido cadastrado pelo chat da triagem à solicitação de origem. O funcionário deve poder abrir o pedido salvo pelo chat dessa solicitação. |
+| RF33 | O assistente deve preparar no chat um rascunho de agendamento semanal com o comprador, os itens, as quantidades, as unidades, as condições de atendimento, a primeira data de fornecimento e a antecedência da triagem em dias corridos. |
+| RF34 | O funcionário deve poder editar e copiar o texto dos rascunhos de respostas e notificações. |
+| RF35 | O sistema, quando o envio estiver disponível, deve mostrar o destinatário e o canal para o funcionário conferir antes de confirmar. |
+| RF36 | O sistema deve registrar cada envio em uma mensagem no chat com o texto autorizado, o funcionário que confirmou o envio, o destinatário, o canal e o resultado do envio. |
+| RF37 | O assistente, quando o remetente pedir documentos, dados pessoais ou dados bancários, deve avisar o funcionário e indicar o que foi solicitado. |
+| RF38 | O funcionário deve poder ler, adicionar, baixar e excluir documentos na aplicação. |
 
 As consultas documentais, financeiras e operacionais usam a mesma interface conversacional. Uma mensagem pode exigir várias consultas. A classificação não exige um fluxo ou agente separado para cada tipo.
 
@@ -84,10 +80,10 @@ O Telegram pode substituir o WhatsApp na demonstração se o teste com a integra
 | RN13 | O sistema deve aceitar apenas quantidades positivas nas alocações. Deve somar as alocações na unidade do item, usando apenas as conversões permitidas pela RN03, e rejeitar o salvamento se a unidade for incompatível ou o total ultrapassar a quantidade solicitada. |
 | RN14 | O sistema, ao cancelar um pedido, deve mudar seu estado para cancelado e excluir suas alocações na mesma operação. O sistema deve manter o pedido disponível para consulta e retirar essas alocações dos próximos resumos do produtor. |
 | RN15 | O sistema deve gerar uma única solicitação por ocorrência na data prevista para a triagem e vinculá-la ao agendamento. A solicitação deve registrar o comprador, os itens, as quantidades, as unidades, as condições de atendimento e a data de fornecimento. O sistema deve aplicar alterações e cancelamentos da série apenas às ocorrências pendentes. Se o dia de fornecimento mudar, o novo dia passa a valer a partir da semana de fornecimento da primeira ocorrência pendente. A semana vai de segunda a domingo. Se a série já tiver uma solicitação com fornecimento naquela semana, a mudança começa na semana seguinte. As solicitações já geradas mantêm os dados originais. |
-| RN16 | Acrescentar a resposta ao histórico da solicitação aberta quando houver vínculo confiável e atualizar a análise e as pendências. Se uma resposta vinculada corrigir um dado usado em um rascunho de pedido aberto, mostrar a correção ao funcionário antes da confirmação. O funcionário decide se ajusta o rascunho. O mesmo remetente ou a mesma conversa, por si só, não estabelece esse vínculo. Iniciar nova triagem para demandas independentes, vínculos incertos ou respostas a solicitações encerradas. |
-| RN17 | O sistema deve oferecer apenas revisão e cópia do rascunho para respostas às mensagens da amostra. O sistema deve enviar somente a versão do texto que o funcionário confirmou explicitamente para o destinatário e o canal conferidos. O sistema deve enviar respostas pelo canal de origem se a mensagem tiver chegado por um canal integrado, houver um destino válido e o canal permitir o envio. O sistema deve enviar notificações pelo canal integrado escolhido pelo funcionário e para o destino conferido na revisão. Na demonstração, deve restringir o envio de notificações a destinos de teste vinculados pela equipe ao produtor. Quando o envio estiver indisponível, o sistema deve informar o motivo e oferecer a cópia do rascunho conforme a RN21. |
+| RN16 | O sistema deve acrescentar a resposta ao histórico da solicitação ainda não finalizada quando houver vínculo confiável e atualizar a análise e as pendências. Se uma resposta vinculada corrigir um dado usado em um rascunho de pedido aberto, o sistema deve mostrar a correção ao funcionário antes da confirmação. O funcionário decide se ajusta o rascunho. O mesmo remetente ou a mesma conversa, por si só, não estabelece esse vínculo. O sistema deve iniciar nova triagem para demandas independentes, vínculos incertos ou respostas a solicitações finalizadas. |
+| RN17 | O sistema deve oferecer apenas revisão e cópia do rascunho para respostas às mensagens enviadas pelo script da apresentação. O sistema deve enviar somente a versão do texto que o funcionário confirmou explicitamente para o destinatário e o canal conferidos. O sistema deve enviar respostas pelo canal de origem se a mensagem tiver chegado por um canal integrado, houver um destino válido e o canal permitir o envio. O sistema deve enviar notificações pelo canal integrado escolhido pelo funcionário e para o destino conferido na revisão. Na demonstração, deve restringir o envio de notificações a destinos de teste vinculados pela equipe ao produtor. Quando o envio estiver indisponível, o sistema deve informar o motivo e oferecer a cópia do rascunho conforme a RN21. |
 | RN18 | O sistema só deve permitir nova tentativa de envio após confirmar a falha anterior e receber nova confirmação explícita do funcionário. O sistema deve manter o reenvio bloqueado enquanto houver uma tentativa em andamento ou com resultado incerto, mesmo se o funcionário editar o rascunho. O sistema deve sinalizar resultados incertos para conferência. |
-| RN19 | O sistema deve bloquear a exclusão de um registro de produtor, produto ou documento vinculado a um pedido, alocação, agendamento, lote, transação financeira ou citação. |
+| RN19 | O sistema deve bloquear a exclusão de um documento usado em uma citação. |
 | RN20 | O funcionário deve decidir se inclui no pedido cada item solicitado sob condição, como "se tiver". |
 | RN21 | O assistente deve deixar fora dos rascunhos externos, por padrão, documentos internos, documentos solicitados pelo remetente e dados pessoais ou bancários. O sistema só deve disponibilizar para cópia ou envio um texto com esse material depois que o funcionário autorizar os dados ou trechos específicos para aquele destinatário. |
 | RN22 | O sistema, na confirmação pelo funcionário e imediatamente antes de cada tentativa de envio, deve aplicar a RN11 às respostas e notificações que confirmam fornecimento. O sistema deve bloquear o envio e informar o motivo se o compromisso não atender à regra. |
@@ -103,20 +99,22 @@ O sistema deve usar o horário local da cooperativa, em Pernambuco, para interpr
 
 | ID | Requisito e verificação |
 | --- | --- |
-| RNF01 | Preservar mensagens, histórico de envios, conversas, análises, cadastros, pedidos, agendamentos e alocações após fechar e reabrir a aplicação. Verificar que a retomada mantém os dados e separa o contexto de cada solicitação. |
+| RNF01 | O sistema deve preservar mensagens, conversas, análises, documentos adicionados pela aplicação, pedidos, agendamentos e alocações após fechar e reabrir a aplicação. O funcionário deve poder recuperar o histórico de envios no chat. Verificar que a retomada mantém os dados e separa o contexto de cada solicitação. |
 | RNF02 | O sistema deve indicar processamento em andamento e avisar sobre a demora após 60 segundos sem conclusão. Deve preservar a solicitação. Para envios, deve oferecer nova tentativa somente após confirmar a falha, conforme a RN18. Para as demais operações, deve oferecer nova tentativa após o aviso de demora. Verificar também o tratamento de falha do modelo ou das consultas. |
-| RNF03 | O sistema deve evitar registros duplicados em novas tentativas da mesma operação, inclusive no recebimento de mensagens, na confirmação pelo chat, na geração de ocorrências agendadas e no cadastro de alocações. O sistema deve acionar no máximo uma tentativa de envio por confirmação, mesmo quando a receber mais de uma vez. |
+| RNF03 | O sistema deve evitar registros duplicados em novas tentativas da mesma operação, inclusive no recebimento de mensagens, na confirmação pelo chat, na geração de ocorrências agendadas e no cadastro de alocações. |
 | RNF04 | Executar cálculos financeiros sobre os registros selecionados e conferir os resultados com valores esperados. A redação pelo modelo deve preservar esses resultados. |
 | RNF05 | Proteger consultas e operações internas com validação de tokens JWT, rejeitando acessos sem token válido. Validar a autenticidade dos eventos recebidos por webhook antes de processá-los. |
-| RNF06 | Disponibilizar os dados e documentos fornecidos por uma carga reproduzível que preserve originais, identificadores e fontes. Preservar o valor e a descrição originais das quantidades. Usar a unidade explícita no registro mesmo quando o nome da coluna indicar outra. Sinalizar unidades ambíguas e manter essas quantidades fora de somas e conversões até esclarecê-las. Repetir a carga sem duplicar registros nem preencher lacunas com dados fictícios. Na mesma base, a recarga preserva as edições e exclusões feitas no CRUD. Reaproveitar cada mensagem da amostra pelo identificador original. |
-| RNF07 | Integrar os canais por adaptadores com uma interface comum. Usar essa interface para conectar novos canais à triagem e, quando houver suporte a envio, ao fluxo de revisão e aprovação. |
-| RNF08 | O sistema deve tratar confirmações da mesma versão de um rascunho para o mesmo destinatário e canal como um único envio, inclusive quando ocorrerem em paralelo. O sistema deve seguir a RN18 para novas tentativas desse envio. |
+| RNF06 | O sistema deve disponibilizar os dados e documentos fornecidos por uma carga reproduzível que preserve originais, identificadores e fontes. A carga deve preservar o valor e a descrição originais das quantidades e usar a unidade explícita no registro mesmo quando o nome da coluna indicar outra. O sistema deve sinalizar unidades ambíguas e manter essas quantidades fora de somas e conversões até esclarecê-las. Ao repetir a mesma carga, o sistema deve reaproveitar os registros existentes, manter as lacunas da fonte e preservar as exclusões de documentos feitas pela aplicação. |
+| RNF07 | O sistema deve receber mensagens por uma interface comum de entrada, aplicando adaptadores quando necessário. |
+| RNF08 | O sistema deve acionar no máximo uma tentativa de envio por confirmação, mesmo quando a receber mais de uma vez. O sistema deve tratar confirmações da mesma versão de um rascunho para o mesmo destinatário e canal como um único envio, inclusive quando ocorrerem em paralelo. O sistema deve seguir a RN18 para novas tentativas desse envio. |
 | RNF09 | O sistema deve preservar a versão vigente do registro quando rejeitar uma alteração. |
 | RNF10 | O sistema deve preservar análises e esclarecimentos mais recentes quando receber resultados atrasados de tentativas anteriores. |
 
 ## Validação da entrega
 
 Definir os resultados esperados antes de testar as 15 mensagens fornecidas e as consultas das três frentes. Conferir extração, classificação, perguntas de esclarecimento, fontes e reconhecimento de informação ausente ou conflitante.
+
+Na apresentação, executar um script que lê as 15 mensagens de `pedidos.json`, prepara cada registro no formato esperado pela entrada do seu canal e faz uma requisição por mensagem. Verificar se as mensagens entram no fluxo normal de triagem.
 
 Validar as operações dos CRUDs. Verificar o cadastro de um pedido pelo chat, a geração de uma ocorrência agendada e a consulta de uma alocação no resumo por produtor.
 
