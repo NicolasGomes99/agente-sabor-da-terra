@@ -14,10 +14,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest<T>(
+async function fetchApi(
   path: string,
   options: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(options.headers)
   const accessToken = getAccessToken()
 
@@ -37,6 +37,14 @@ export async function apiRequest<T>(
     headers,
   })
 
+  if (!response.ok) {
+    throw new ApiError(response.status, await readResponseBody(response))
+  }
+
+  return response
+}
+
+async function readResponseBody(response: Response): Promise<unknown> {
   const responseText = await response.text()
   let details: unknown
 
@@ -48,9 +56,20 @@ export async function apiRequest<T>(
     }
   }
 
-  if (!response.ok) {
-    throw new ApiError(response.status, details)
-  }
+  return details
+}
 
-  return details as T
+export async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  return (await readResponseBody(await fetchApi(path, options))) as T
+}
+
+export async function apiRequestBlob(
+  path: string,
+  options: RequestInit = {},
+): Promise<Blob> {
+  const response = await fetchApi(path, options)
+  return response.blob()
 }
