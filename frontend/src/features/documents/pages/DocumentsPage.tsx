@@ -5,6 +5,7 @@ import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
 import { DocumentPreview } from '../components/DocumentPreview'
 import {
+  deleteDocument,
   downloadDocument,
   listDocuments,
   uploadDocument,
@@ -55,14 +56,18 @@ export function DocumentsPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [downloads, setDownloads] = useState<Record<string, DownloadState | undefined>>({})
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null)
+  const deleteInProgress = useRef(false)
   const activeDownloads = useRef(new Set<string>())
-  const downloadLifetime = useRef<AbortController | null>(null)
+  const pageLifetime = useRef<AbortController | null>(null)
   const uploadInProgress = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const lifetime = new AbortController()
-    downloadLifetime.current = lifetime
+    pageLifetime.current = lifetime
     return () => lifetime.abort()
   }, [])
 
@@ -74,6 +79,8 @@ export function DocumentsPage() {
         const documents = await listDocuments(controller.signal)
         if (!controller.signal.aborted) {
           setState({ status: 'ready', documents })
+          setSelectedDocument((current) =>
+            current && documents.some((document) => document.id === current.id) ? current : null)
         }
       } catch (error) {
         if (controller.signal.aborted) return
@@ -90,6 +97,9 @@ export function DocumentsPage() {
   }, [attempt, logout])
 
   function retry() {
+    if (uploadInProgress.current || deleteInProgress.current) return
+    setDeleteError(null)
+    setDeleteTarget(null)
     setState({ status: 'loading' })
     setAttempt((previous) => previous + 1)
   }
@@ -130,7 +140,7 @@ export function DocumentsPage() {
   }
 
   async function startDownload({ id, original_filename }: DocumentRecord) {
-    const lifetime = downloadLifetime.current
+    const lifetime = pageLifetime.current
     if (!lifetime || lifetime.signal.aborted || activeDownloads.current.has(id)) return
 
     activeDownloads.current.add(id)
@@ -156,6 +166,44 @@ export function DocumentsPage() {
       activeDownloads.current.delete(id)
       if (!lifetime.signal.aborted) {
         setDownloads((current) => ({ ...current, [id]: next }))
+      }
+    }
+  }
+
+  async function confirmDelete(id: string) {
+    const lifetime = pageLifetime.current
+    if (!lifetime || lifetime.signal.aborted || deleteTarget !== id || deleteInProgress.current) {
+      return
+    }
+
+    deleteInProgress.current = true
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteDocument(id)
+      if (lifetime.signal.aborted) return
+      setState((current) => current.status === 'ready'
+        ? { status: 'ready', documents: current.documents.filter((record) => record.id !== id) }
+        : current)
+      setSelectedDocument((current) => current?.id === id ? null : current)
+    } catch (error) {
+      if (lifetime.signal.aborted) return
+      const status = error instanceof ApiError ? error.status : undefined
+      if (status === 401) {
+        logout()
+      } else {
+        setDeleteError({
+          id,
+          message: status === 404
+            ? 'O documento não está mais disponível no servidor.'
+            : 'Não foi possível confirmar a exclusão do documento.',
+        })
+      }
+    } finally {
+      deleteInProgress.current = false
+      if (!lifetime.signal.aborted) {
+        setDeleteTarget(null)
+        setDeleting(false)
       }
     }
   }
@@ -216,7 +264,42 @@ export function DocumentsPage() {
                       >
                         {download?.status === 'pending' ? 'Baixando…' : 'Baixar'}
                       </button>
+                      <button
+                        type="button"
+                        disabled={deleting}
+                        onClick={() => {
+                          setDeleteError(null)
+                          setDeleteTarget(document.id)
+                        }}
+                      >
+                        Excluir
+                      </button>
                     </div>
+                    {deleteTarget === document.id && (
+                      <div className="document-delete-confirmation">
+                        <p>Excluir “{document.original_filename}”?</p>
+                        <div className="document-list-actions">
+                          <button type="button" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deleting}
+                            onClick={() => void confirmDelete(document.id)}
+                          >
+                            {deleting ? 'Excluindo…' : 'Confirmar exclusão'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {deleteError?.id === document.id && (
+                      <div className="document-delete-confirmation">
+                        <p role="alert">{deleteError.message}</p>
+                        <button type="button" disabled={uploading || deleting} onClick={retry}>
+                          Atualizar lista
+                        </button>
+                      </div>
+                    )}
                   </li>
                 )
               })}

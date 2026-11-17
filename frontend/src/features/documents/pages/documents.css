@@ -81,6 +81,22 @@
   opacity: 0.6;
 }
 
+.document-delete-confirmation {
+  flex-basis: 100%;
+  padding: 0.75rem;
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+}
+
+.document-delete-confirmation p {
+  margin: 0 0 0.75rem;
+}
+
+.document-delete-confirmation button:disabled {
+  opacity: 0.6;
+}
+
 .document-preview {
   margin-top: 1rem;
   padding: 1rem;
