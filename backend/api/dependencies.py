@@ -1,15 +1,15 @@
 from typing import Annotated
 
-from backend.api.repositories.chat import ChatRepository
-from backend.api.services.chat import ChatService
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import get_db
 from .models.user import User
+from .repositories.chat import ChatRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
+from .services.chat import ChatService
 from .services.user import UserService
 
 

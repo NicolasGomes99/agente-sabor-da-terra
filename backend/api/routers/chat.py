@@ -28,7 +28,7 @@ async def create_session(user: CurrentUser, service: Service) -> SessionOut:
     chat = await service.create_session(user.id)
     return SessionOut.model_validate(chat)
 
-@router.get("/session", response_model=list[SessionOut])
+@router.get("/sessions", response_model=list[SessionOut])
 async def list_sessions(user: CurrentUser, service: Service) -> list[SessionOut]:
     sessions = await service.list_session(user.id)
     return [SessionOut.model_validate(s) for s in sessions]

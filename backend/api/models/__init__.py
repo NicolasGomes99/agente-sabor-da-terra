@@ -1,6 +1,11 @@
 from .base import Base
-from .chat_message import ChatMessage
-from .chat_session import ChatSession
 from .user import User
+from .chat_session import ChatSession
+from .chat_message import ChatMessage
 
-__all__ = ["Base", "ChatMessage", "ChatSession", "User"]
+__all__ = [
+    "Base",
+    "User",
+    "ChatSession",
+    "ChatMessage",
+]
