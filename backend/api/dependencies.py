@@ -25,7 +25,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 
 def get_auth_service(
-    session: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> AuthService:
     user_repository = UserRepository(session)
     user_service = UserService(user_repository)
@@ -42,7 +42,7 @@ def get_document_storage() -> DocumentStorage:
 
 
 def get_document_service(
-    session: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
     storage: Annotated[DocumentStorage, Depends(get_document_storage)],
 ) -> DocumentService:
     return DocumentService(DocumentRepository(session), storage)
