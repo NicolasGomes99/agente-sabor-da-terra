@@ -26,6 +26,10 @@ O Cloud SQL hospeda o PostgreSQL com os usuários, as conversas, os pedidos e os
 
 O Cloud Storage guarda os arquivos originais em um bucket privado. Escolhemos o serviço para armazenar os arquivos como objetos e manter no PostgreSQL a chave, os metadados e os trechos indexados. A API usa a chave para localizar o original quando o funcionário abre uma citação, baixa um documento ou o exclui. [Objetos no Cloud Storage](https://docs.cloud.google.com/storage/docs/objects)
 
+No Cloud Run, configure `DOCUMENT_STORAGE_BACKEND=gcs` e informe o nome do bucket em `DOCUMENT_STORAGE_BUCKET`. O SDK usa as credenciais da conta de serviço vinculada ao Cloud Run. Conceda a essa conta acesso para criar, ler e excluir objetos no bucket privado. [Identidade do Cloud Run](https://docs.cloud.google.com/run/docs/securing/service-identity#call-google-cloud-apis-with-the-service-identity) · [Permissões do Cloud Storage](https://docs.cloud.google.com/storage/docs/access-control/iam-permissions#object_permissions)
+
+Se o log indicar um commit incerto ou uma falha na limpeza, procure a `storage_key` informada no log na tabela `documents` e no armazenamento do mesmo ambiente. Preserve o arquivo se ainda houver um registro para a chave. Se confirmar que o registro está ausente e o arquivo ainda existe, avalie a remoção manual. O nome original pode se repetir entre documentos.
+
 #### Pub/Sub
 
 O Gmail publica notificações de alterações na caixa de entrada em um tópico do Pub/Sub. Uma assinatura push entrega essas notificações à API no Cloud Run, que consulta a API do Gmail para buscar as novas mensagens. Escolhemos o Pub/Sub para receber os eventos conforme chegam e evitar consultas periódicas à caixa de entrada. [Notificações push do Gmail](https://developers.google.com/workspace/gmail/api/guides/push)
@@ -88,6 +92,8 @@ Com até seis versões ativas de segredos e 10.000 acessos no mês, o custo prev
 
 - Envie uma nova demanda pelo Gmail e outra pelo WhatsApp com o funcionário desconectado. Confira se a fila executa uma triagem por vez e se cada nova demanda gera uma solicitação. Envie uma resposta que dê continuidade a uma solicitação aberta e confira se ela entra na conversa existente. Reenvie o mesmo evento e confira se o sistema reaproveita o registro.
 - Execute o script das 15 mensagens de `pedidos.json` e confira os cartões de triagem. Para essas mensagens de teste, o funcionário pode revisar e copiar o rascunho. Teste o envio real com os contatos de teste autorizados pela equipe.
-- Adicione um documento, consulte seu conteúdo pelo chat e abra o original pela citação. Verifique também se uma ocorrência agendada entra na fila na data prevista.
+- Valide a API de documentos com um bucket privado. Com um JWT válido, envie dois arquivos com o mesmo nome e conteúdos diferentes. Confira os dois registros na lista e compare os bytes de cada download com os originais. Exclua um dos registros e confira se apenas o objeto correspondente foi removido do bucket e se o outro continua disponível.
+- Quando a consulta documental e as citações estiverem disponíveis, adicione um documento, consulte seu conteúdo pelo chat e abra o original pela citação.
+- Verifique se uma ocorrência agendada entra na fila na data prevista.
 
 O método de publicação e a escolha do framework e do modelo dos agentes ainda serão definidos.
