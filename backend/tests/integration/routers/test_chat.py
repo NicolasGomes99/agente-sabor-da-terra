@@ -4,8 +4,9 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api import database
 from api.app import fastapi_app as app
 from api.database import get_db
 from api.repositories.user import UserRepository
@@ -21,6 +22,12 @@ async def client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[httpx.AsyncClient]:
     monkeypatch.setenv("JWT_SECRET_KEY", TEST_SECRET_KEY)
+    auth_sessions = async_sessionmaker(
+        bind=await db_session.connection(),
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    monkeypatch.setattr(database, "get_session_maker", lambda: auth_sessions)
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
@@ -28,13 +35,14 @@ async def client(
     app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://test",
-    ) as test_client:
-        yield test_client
-
-    app.dependency_overrides.clear()
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
 
 async def create_user_headers(db_session: AsyncSession) -> dict[str, str]:
