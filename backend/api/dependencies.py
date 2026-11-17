@@ -6,6 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from google.cloud.storage import Client
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import database
 from .config import (
     get_document_storage_backend,
     get_document_storage_bucket,
@@ -35,12 +36,16 @@ def _get_gcs_client() -> Client:
         return _gcs_client
 
 
-def get_auth_service(
-    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
-) -> AuthService:
+def _build_auth_service(session: AsyncSession) -> AuthService:
     user_repository = UserRepository(session)
     user_service = UserService(user_repository)
     return AuthService(user_service)
+
+
+def get_auth_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> AuthService:
+    return _build_auth_service(session)
 
 
 def get_document_storage() -> DocumentStorage:
@@ -60,10 +65,11 @@ def get_document_service(
 
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
-    auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> User:
+    session_maker = database.get_session_maker()
     try:
-        user = await auth_service.get_current_user(token)
+        async with session_maker() as session:
+            user = await _build_auth_service(session).get_current_user(token)
     except InvalidAccessTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
