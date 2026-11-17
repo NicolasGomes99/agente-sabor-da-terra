@@ -2,13 +2,24 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from google.cloud.storage import Client
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config import (
+    get_document_storage_backend,
+    get_document_storage_bucket,
+    get_document_storage_dir,
+)
 from .database import get_db
 from .models.user import User
+from .repositories.document import DocumentRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
+from .services.document import DocumentService
 from .services.user import UserService
+from .storage.base import DocumentStorage
+from .storage.gcs import GCSDocumentStorage
+from .storage.local import LocalDocumentStorage
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -19,6 +30,22 @@ def get_auth_service(
     user_repository = UserRepository(session)
     user_service = UserService(user_repository)
     return AuthService(user_service)
+
+
+def get_document_storage() -> DocumentStorage:
+    if get_document_storage_backend() == "local":
+        return LocalDocumentStorage(get_document_storage_dir())
+
+    bucket_name = get_document_storage_bucket()
+    client = Client()
+    return GCSDocumentStorage(client.bucket(bucket_name))
+
+
+def get_document_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    storage: Annotated[DocumentStorage, Depends(get_document_storage)],
+) -> DocumentService:
+    return DocumentService(DocumentRepository(session), storage)
 
 
 async def get_current_user(
