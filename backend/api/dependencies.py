@@ -1,5 +1,7 @@
 from typing import Annotated
 
+from backend.api.repositories.chat import ChatRepository
+from backend.api.services.chat import ChatService
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,7 @@ from .models.user import User
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.user import UserService
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -42,3 +45,8 @@ async def get_current_user(
         )
 
     return user
+
+def get_chat_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> ChatService:
+    return ChatService(ChatRepository(session))
