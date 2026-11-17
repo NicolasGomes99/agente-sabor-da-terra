@@ -95,7 +95,9 @@ async def test_cors_exposes_content_disposition_for_document_download(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = Mock(spec=DocumentService)
-    service.open_document.return_value = ("certificado.pdf", BytesIO(b"content"))
+    service.prepare_document_read.return_value = (
+        "certificado.pdf", lambda: BytesIO(b"content")
+    )
     overrides = api.app.app.dependency_overrides
     monkeypatch.setitem(overrides, get_current_user, lambda: object())
     monkeypatch.setitem(overrides, get_document_service, lambda: service)

@@ -1,6 +1,8 @@
+import asyncio
 from collections.abc import AsyncIterator
 from io import BytesIO
 from tempfile import SpooledTemporaryFile
+from threading import Event
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import quote
 from uuid import uuid4
@@ -161,15 +163,15 @@ async def test_read_releases_database_session_before_streaming(
         finally:
             lifecycle.append("close")
 
-    class SessionCheckingReader(BytesIO):
-        def read(self, size: int = -1, /) -> bytes:
-            auth_session.__aexit__.assert_awaited_once()
-            assert lifecycle == ["open", "close"]
-            return super().read(size)
+    reader = BytesIO(CONTENT)
 
-    reader = SessionCheckingReader(CONTENT)
+    def open_reader(key: str) -> BytesIO:
+        auth_session.__aexit__.assert_awaited_once()
+        assert lifecycle == ["open", "close"]
+        return reader
+
     storage = Mock(spec=DocumentStorage)
-    storage.open.return_value = reader
+    storage.open.side_effect = open_reader
     app = app_module.app
     monkeypatch.setitem(app.dependency_overrides, get_db, document_database)
     monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
@@ -184,14 +186,42 @@ async def test_read_releases_database_session_before_streaming(
     assert response.status_code == 200
     assert response.content == CONTENT
     assert reader.closed
+    storage.open.assert_called_once_with(document.storage_key)
     auth_session.get.assert_awaited_once_with(User, user.id)
     session.get.assert_awaited_once_with(Document, document.id)
 
 
 @pytest.mark.asyncio
+async def test_read_does_not_open_file_when_session_close_fails(
+    monkeypatch: pytest.MonkeyPatch, document: Document
+) -> None:
+    session = AsyncMock(spec=AsyncSession)
+    session.get.return_value = document
+    storage = Mock(spec=DocumentStorage)
+
+    async def failing_database() -> AsyncIterator[AsyncSession]:
+        yield session
+        raise RuntimeError("database session close failed")
+
+    app = app_module.app
+    monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: object())
+    monkeypatch.setitem(app.dependency_overrides, get_db, failing_database)
+    monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        with pytest.raises(RuntimeError, match="database session close failed"):
+            await client.get(f"/documents/{document.id}/content")
+
+    session.get.assert_awaited_once_with(Document, document.id)
+    storage.open.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_stream_closes_reader_when_send_fails() -> None:
     reader = BytesIO(CONTENT * 10_000)
-    response = DocumentStreamResponse(reader, FILENAME, download=True)
+    response = DocumentStreamResponse(lambda: reader, FILENAME, download=True)
     sent_chunks: list[bytes] = []
 
     async def send(message: Message) -> None:
@@ -205,6 +235,72 @@ async def test_stream_closes_reader_when_send_fails() -> None:
 
     assert sent_chunks
     assert reader.closed
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_reader_when_cancelled_during_open() -> None:
+    loop = asyncio.get_running_loop()
+    opening = asyncio.Event()
+    finish_open = Event()
+    reader = Mock(spec=BytesIO)
+    send = AsyncMock()
+
+    def open_reader() -> BytesIO:
+        loop.call_soon_threadsafe(opening.set)
+        assert finish_open.wait(timeout=5)
+        return reader
+
+    response = DocumentStreamResponse(open_reader, FILENAME, download=True)
+    task = asyncio.create_task(
+        response({"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), send)
+    )
+    try:
+        await asyncio.wait_for(opening.wait(), timeout=5)
+    finally:
+        task.cancel()
+        finish_open.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+    reader.close.assert_called_once_with()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_waits_for_inflight_read_on_disconnect() -> None:
+    loop = asyncio.get_running_loop()
+    reading = asyncio.Event()
+    disconnected = asyncio.Event()
+    finish_read = Event()
+    reader = Mock(spec=BytesIO)
+    lifecycle: list[str] = []
+
+    def read(size: int) -> bytes:
+        loop.call_soon_threadsafe(reading.set)
+        assert finish_read.wait(timeout=5)
+        lifecycle.append("read")
+        return CONTENT
+
+    async def receive() -> Message:
+        await reading.wait()
+        loop.call_soon(disconnected.set)
+        return {"type": "http.disconnect"}
+
+    reader.read.side_effect = read
+    reader.close.side_effect = lambda: lifecycle.append("close")
+    response = DocumentStreamResponse(lambda: reader, FILENAME, download=True)
+    task = asyncio.create_task(
+        response({"type": "http", "asgi": {"spec_version": "2.3"}}, receive, AsyncMock())
+    )
+    try:
+        await asyncio.wait_for(disconnected.wait(), timeout=5)
+        reader.close.assert_not_called()
+    finally:
+        finish_read.set()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert lifecycle == ["read", "close"]
+    reader.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -348,7 +444,7 @@ async def test_read_document_streams_content_and_closes_reader(
     disposition: str,
 ) -> None:
     reader = BytesIO(CONTENT * 10_000)
-    service.open_document.return_value = (filename, reader)
+    service.prepare_document_read.return_value = (filename, lambda: reader)
 
     response = await client.get(f"/documents/{DOCUMENT_ID}/{action}")
 
@@ -359,7 +455,7 @@ async def test_read_document_streams_content_and_closes_reader(
         f"{disposition}; filename*=UTF-8''{quote(filename, safe='')}"
     )
     assert reader.closed
-    service.open_document.assert_awaited_once_with(DOCUMENT_ID)
+    service.prepare_document_read.assert_awaited_once_with(DOCUMENT_ID)
 
 
 @pytest.mark.asyncio
@@ -369,7 +465,11 @@ async def test_read_document_streams_content_and_closes_reader(
 async def test_read_returns_404_for_missing_document_or_file(
     client: httpx.AsyncClient, service: Mock, action: str, error: type[Exception]
 ) -> None:
-    service.open_document.side_effect = error(DOCUMENT_ID)
+    if error is DocumentNotFoundError:
+        service.prepare_document_read.side_effect = error(DOCUMENT_ID)
+    else:
+        open_reader = Mock(side_effect=error(DOCUMENT_ID))
+        service.prepare_document_read.return_value = (FILENAME, open_reader)
 
     response = await client.get(f"/documents/{DOCUMENT_ID}/{action}")
 
@@ -382,7 +482,7 @@ async def test_read_rejects_invalid_uuid(client: httpx.AsyncClient, service: Moc
     response = await client.get("/documents/not-a-uuid/content")
 
     assert response.status_code == 422
-    service.open_document.assert_not_awaited()
+    service.prepare_document_read.assert_not_awaited()
 
 
 @pytest.mark.asyncio

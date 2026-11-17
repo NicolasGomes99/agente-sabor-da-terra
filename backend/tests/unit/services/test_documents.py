@@ -127,13 +127,15 @@ async def test_create_preserves_file_after_commit_failure(service, operations, d
 
 
 @pytest.mark.asyncio
-async def test_open_returns_original_filename_and_reader(service, operations, document):
+async def test_prepare_document_read_defers_storage_open(service, operations, document):
     operations.repository.get_by_id.return_value = document
 
     with BytesIO(b"content") as reader:
         operations.storage.open.return_value = reader
-        result = await service.open_document(document.id)
-        assert result == (document.original_filename, reader)
+        filename, open_reader = await service.prepare_document_read(document.id)
+        assert filename == document.original_filename
+        operations.storage.open.assert_not_called()
+        assert open_reader() is reader
         assert not reader.closed
 
     assert operations.mock_calls == [
@@ -143,7 +145,7 @@ async def test_open_returns_original_filename_and_reader(service, operations, do
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["open_document", "delete_document"])
+@pytest.mark.parametrize("method_name", ["prepare_document_read", "delete_document"])
 async def test_unknown_id_stops_before_accessing_storage(service, operations, method_name):
     document_id = uuid4()
     operations.repository.get_by_id.return_value = None
