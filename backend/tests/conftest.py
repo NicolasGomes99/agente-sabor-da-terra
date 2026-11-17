@@ -1,6 +1,5 @@
 
-import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
@@ -10,20 +9,25 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from testcontainers.community.postgres import PostgresContainer
 
 from api.models import Base
 
 
 @pytest.fixture(scope="session")
-def database_url() -> str:
-    url = os.getenv("TEST_DATABASE_URL")
+def postgres_container() -> Iterator[PostgresContainer]:
+    with PostgresContainer(
+        image="postgres:16-alpine",
+        username="test",
+        password="test",
+        dbname="test",
+    ) as container:
+        yield container
 
-    if not url:
-        raise RuntimeError(
-            "A variável de ambiente TEST_DATABASE_URL não foi definida."
-        )
 
-    return url
+@pytest.fixture(scope="session")
+def database_url(postgres_container: PostgresContainer) -> str:
+    return postgres_container.get_connection_url(driver="asyncpg")
 
 
 @pytest_asyncio.fixture
