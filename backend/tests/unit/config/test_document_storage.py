@@ -19,7 +19,6 @@ def test_upload_limit_defaults_to_ten_mib(monkeypatch: pytest.MonkeyPatch) -> No
 @pytest.mark.parametrize("limit", [1, 30 * 1024**2])
 def test_upload_limit_accepts_bounds(monkeypatch: pytest.MonkeyPatch, limit: int) -> None:
     monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", str(limit))
-
     assert get_document_upload_max_bytes() == limit
 
 

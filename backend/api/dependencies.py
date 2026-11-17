@@ -1,12 +1,13 @@
+
 from threading import Lock
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from google.cloud.storage import Client
+from google.cloud.storage import Client
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import database
 from .config import (
     get_document_storage_backend,
     get_document_storage_bucket,
@@ -14,11 +15,16 @@ from .config import (
 )
 from .database import get_db
 from .models.user import User
+from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
+from .services.chat import ChatService
 from .services.document import DocumentService
 from .services.user import UserService
+from .storage.base import DocumentStorage
+from .storage.gcs import GCSDocumentStorage
+from .storage.local import LocalDocumentStorage
 from .storage.base import DocumentStorage
 from .storage.gcs import GCSDocumentStorage
 from .storage.local import LocalDocumentStorage
@@ -26,8 +32,19 @@ from .storage.local import LocalDocumentStorage
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 _gcs_client_lock = Lock()
 _gcs_client: Client | None = None
+_gcs_client_lock = Lock()
+_gcs_client: Client | None = None
 
 
+def _get_gcs_client() -> Client:
+    global _gcs_client
+    with _gcs_client_lock:
+        if _gcs_client is None:
+            _gcs_client = Client()
+        return _gcs_client
+
+
+def _build_auth_service(session: AsyncSession) -> AuthService:
 def _get_gcs_client() -> Client:
     global _gcs_client
     with _gcs_client_lock:
@@ -63,13 +80,20 @@ def get_document_service(
     return DocumentService(DocumentRepository(session), storage)
 
 
+def get_chat_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> ChatService:
+    return ChatService(ChatRepository(session))
+
+
+
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     session_maker = database.get_session_maker()
     try:
-        async with session_maker() as session:
-            user = await _build_auth_service(session).get_current_user(token)
+        user = await _build_auth_service(session).get_current_user(token)
     except InvalidAccessTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -85,3 +109,4 @@ async def get_current_user(
         )
 
     return user
+

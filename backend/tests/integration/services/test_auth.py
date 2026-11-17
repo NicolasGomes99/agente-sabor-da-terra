@@ -5,7 +5,7 @@ from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 
 def build_auth_service(session: AsyncSession) -> AuthService:
