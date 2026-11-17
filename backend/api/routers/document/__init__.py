@@ -11,8 +11,29 @@ from ...services.document import DocumentNotFoundError, DocumentService
 from .stream import INLINE_MEDIA_TYPES, DocumentStreamResponse, file_responses
 from .upload import document_upload
 
+ERROR_DETAIL_CONTENT = {
+    "application/json": {
+        "schema": {
+            "type": "object",
+            "required": ["detail"],
+            "properties": {"detail": {"type": "string"}},
+        }
+    }
+}
+
 router = APIRouter(
-    prefix="/documents", tags=["documents"], dependencies=[Depends(get_current_user)]
+    prefix="/documents",
+    tags=["documents"],
+    dependencies=[Depends(get_current_user)],
+    responses={
+        401: {
+            "description": "A valid bearer token is required.",
+            "content": ERROR_DETAIL_CONTENT,
+            "headers": {
+                "WWW-Authenticate": {"schema": {"type": "string", "example": "Bearer"}}
+            },
+        }
+    },
 )
 
 DocumentServiceDependency = Annotated[DocumentService, Depends(get_document_service)]
@@ -27,7 +48,13 @@ async def list_documents(service: DocumentServiceDependency) -> list[Document]:
     "",
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
-    responses={413: {"description": "Document upload exceeds the size limit."}},
+    responses={
+        413: {"description": "Document upload exceeds the size limit."},
+        422: {
+            "description": "A document file with a filename is required.",
+            "content": ERROR_DETAIL_CONTENT,
+        },
+    },
     openapi_extra={
         "requestBody": {
             "required": True,
@@ -82,7 +109,11 @@ async def download_document(
     return await _document_response(document_id, service, download=True)
 
 
-@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Document not found.", "content": ERROR_DETAIL_CONTENT}},
+)
 async def delete_document(document_id: UUID, service: DocumentServiceDependency) -> Response:
     try:
         await service.delete_document(document_id)
