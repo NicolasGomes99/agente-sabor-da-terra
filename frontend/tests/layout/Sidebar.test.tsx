@@ -10,6 +10,30 @@ function LocationProbe() {
 }
 
 describe('Sidebar', () => {
+  it('navigates to documents and highlights the current link', () => {
+    render(
+      <AuthContext.Provider value={{
+        accessToken: 'access-token', isAuthenticated: true, login: vi.fn(), logout: vi.fn(),
+      }}>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Sidebar />
+          <LocationProbe />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    )
+
+    const chat = screen.getByRole('link', { name: 'Chat' })
+    const documents = screen.getByRole('link', { name: 'Documentos' })
+    expect(chat.getAttribute('aria-current')).toBe('page')
+    fireEvent.click(documents)
+
+    expect(screen.getByTestId('location').textContent).toBe('/documents')
+    expect(documents.getAttribute('aria-current')).toBe('page')
+    expect(documents.classList.contains('active')).toBe(true)
+    expect(chat.classList.contains('active')).toBe(false)
+    expect(chat.hasAttribute('aria-current')).toBe(false)
+  })
+
   it('logs out and navigates to login', () => {
     const logout = vi.fn()
 
