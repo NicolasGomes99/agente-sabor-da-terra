@@ -5,16 +5,18 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app import app
+from api.app import app, fastapi_app
 from api.database import get_db
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
 
+pytestmark = pytest.mark.asyncio(loop_scope="function")
+
 TEST_SECRET_KEY = "test-secret-key-with-at-least-32-bytes-long"
 
 
-@pytest_asyncio.fixture(loop_scope="session")
+@pytest_asyncio.fixture(loop_scope="function")
 async def client(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -24,7 +26,7 @@ async def client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
-    app.dependency_overrides[get_db] = override_get_db
+    fastapi_app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(
@@ -33,10 +35,9 @@ async def client(
     ) as test_client:
         yield test_client
 
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
-@pytest.mark.asyncio
 async def test_login_returns_access_token(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -65,7 +66,6 @@ async def test_login_returns_access_token(
     assert auth_service.decode_access_token(response_data["access_token"]) == user.id
 
 
-@pytest.mark.asyncio
 async def test_login_rejects_invalid_credentials(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -93,7 +93,6 @@ async def test_login_rejects_invalid_credentials(
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.asyncio
 async def test_login_rejects_invalid_request_body(
     client: httpx.AsyncClient,
 ) -> None:

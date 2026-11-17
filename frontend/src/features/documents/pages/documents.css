@@ -1,0 +1,168 @@
+.documents-page {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 2rem);
+}
+
+.documents-page h1 {
+  margin: 0 0 1rem;
+}
+
+.documents-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.documents-upload label {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.documents-upload input {
+  display: block;
+  max-width: 100%;
+}
+
+.documents-upload > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.documents-upload button:disabled {
+  opacity: 0.6;
+}
+
+@media (max-width: 36rem) {
+  .documents-upload {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.documents-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.documents-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  overflow-wrap: anywhere;
+}
+
+.document-list-name {
+  min-width: 0;
+}
+
+.document-list-name p {
+  margin: 0.25rem 0 0;
+  color: var(--color-danger);
+}
+
+.document-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.document-list-actions button:disabled {
+  opacity: 0.6;
+}
+
+.document-delete-confirmation {
+  flex-basis: 100%;
+  padding: 0.75rem;
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+}
+
+.document-delete-confirmation p {
+  margin: 0 0 0.75rem;
+}
+
+.document-delete-confirmation button:disabled {
+  opacity: 0.6;
+}
+
+.document-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.document-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.document-preview h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.document-preview iframe {
+  width: 100%;
+  height: min(65vh, 48rem);
+  border: 0;
+}
+
+.document-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 65vh;
+  margin-inline: auto;
+  object-fit: contain;
+}
+
+.document-preview pre {
+  max-height: 65vh;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.documents-list li + li {
+  border-top: 1px solid var(--color-border);
+}
+
+.documents-error {
+  padding: 1rem;
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+
+.documents-error p {
+  margin: 0 0 0.75rem;
+}
+
+.documents-error button,
+.documents-list button,
+.document-preview button,
+.documents-upload button {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-surface);
+  background: var(--color-primary);
+  border: 0;
+  border-radius: var(--radius-sm);
+}

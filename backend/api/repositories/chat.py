@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
 
+
 class ChatRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

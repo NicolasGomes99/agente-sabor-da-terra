@@ -7,8 +7,10 @@ dependencies = [
     "asyncpg>=0.32.0",
     "fastapi>=0.163.1",
     "google-adk>=2.14.1",
+    "google-cloud-storage>=3.17.1",
     "pwdlib[argon2]>=0.4.2",
     "pyjwt>=2.15.1",
+    "python-multipart>=0.0.33",
     "sqlalchemy[asyncio]>=2.1.8",
 ]
 

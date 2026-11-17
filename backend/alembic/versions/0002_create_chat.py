@@ -9,6 +9,7 @@ Create Date: 2026-11-16 10:00:00
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0002_create_chat"

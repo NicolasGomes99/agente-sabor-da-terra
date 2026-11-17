@@ -1,8 +1,8 @@
 from uuid import UUID
 
-from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
 from ..repositories.chat import ChatRepository
+
 
 class SessionNotFoundError(LookupError):
     pass

@@ -5,8 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.user import User
 
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 
-@pytest.mark.asyncio
+
 async def test_user_persists_with_generated_uuid(
     db_session: AsyncSession,
 ) -> None:
@@ -26,7 +27,6 @@ async def test_user_persists_with_generated_uuid(
     assert persisted_user.password_hash == "password-hash"
 
 
-@pytest.mark.asyncio
 async def test_user_persists_explicit_uuid(
     db_session: AsyncSession,
 ) -> None:
