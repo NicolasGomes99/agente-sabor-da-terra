@@ -9,6 +9,40 @@
   margin: 0 0 1rem;
 }
 
+.documents-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.documents-upload label {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.documents-upload input {
+  display: block;
+  max-width: 100%;
+}
+
+.documents-upload > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.documents-upload button:disabled {
+  opacity: 0.6;
+}
+
+@media (max-width: 36rem) {
+  .documents-upload {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .documents-list {
   margin: 0;
   padding: 0;
@@ -38,7 +72,8 @@
   margin: 0 0 0.75rem;
 }
 
-.documents-error button {
+.documents-error button,
+.documents-upload button {
   padding: 0.5rem 0.75rem;
   color: var(--color-surface);
   background: var(--color-primary);
