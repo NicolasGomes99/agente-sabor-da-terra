@@ -1,13 +1,34 @@
 import logging
-from asyncio import to_thread
+from asyncio import CancelledError, create_task, shield, to_thread, wait
+from collections.abc import Coroutine
 from typing import BinaryIO
 from uuid import UUID, uuid4
+
+from anyio import CancelScope
 
 from ..models.document import Document
 from ..repositories.document import DocumentRepository
 from ..storage.base import DocumentReader, DocumentStorage
 
 logger = logging.getLogger(__name__)
+
+
+async def _finish_write[T](operation: Coroutine[object, object, T]) -> T:
+    task = create_task(operation)
+    try:
+        return await shield(task)
+    except CancelledError:
+        with CancelScope(shield=True):
+            while not task.done():
+                try:
+                    await wait((task,))
+                except CancelledError:
+                    continue
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.error("Document operation failed after request cancellation", exc_info=error)
+        raise
 
 
 class DocumentNotFoundError(LookupError):
@@ -27,20 +48,27 @@ class DocumentService:
     async def create_document(
         self, original_filename: str, source: BinaryIO
     ) -> Document:
+        return await _finish_write(self._create_document(original_filename, source))
+
+    async def _create_document(self, original_filename: str, source: BinaryIO) -> Document:
         key = uuid4().hex
         await to_thread(self.storage.save, key, source)
 
         try:
             document = await self.repository.create(original_filename, key)
+        except Exception:
+            await self._rollback()
+            try:
+                await to_thread(self.storage.delete, key)
+            except Exception:
+                logger.exception("Failed to clean up document file %s", key)
+            raise
+
+        try:
             await self.repository.session.commit()
         except Exception:
-            try:
-                await self.repository.session.rollback()
-            finally:
-                try:
-                    await to_thread(self.storage.delete, key)
-                except Exception:
-                    logger.exception("Failed to clean up document file %s", key)
+            logger.exception("Could not confirm document creation for storage key %s", key)
+            await self._rollback()
             raise
 
         return document
@@ -51,16 +79,36 @@ class DocumentService:
         return document.original_filename, reader
 
     async def delete_document(self, document_id: UUID) -> None:
+        await _finish_write(self._delete_document(document_id))
+
+    async def _delete_document(self, document_id: UUID) -> None:
         document = await self._get_document(document_id)
         key = document.storage_key
 
         try:
             await self.repository.delete(document)
-            await to_thread(self.storage.delete, key)
+        except Exception:
+            await self._rollback()
+            raise
+
+        try:
             await self.repository.session.commit()
         except Exception:
-            await self.repository.session.rollback()
+            logger.exception("Could not confirm deletion of document %s (key %s)", document_id, key)
+            await self._rollback()
             raise
+
+        try:
+            await to_thread(self.storage.delete, key)
+        except Exception:
+            logger.exception("Failed to remove file for deleted document %s (key %s)", document_id, key)
+            raise
+
+    async def _rollback(self) -> None:
+        try:
+            await self.repository.session.rollback()
+        except Exception:
+            logger.exception("Failed to roll back document transaction")
 
     async def _get_document(self, document_id: UUID) -> Document:
         document = await self.repository.get_by_id(document_id)
