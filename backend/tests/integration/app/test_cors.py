@@ -7,7 +7,6 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
 
 import api.app
 from api.dependencies import get_current_user, get_document_service
@@ -23,8 +22,7 @@ async def client(
         "http://localhost:5173,http://127.0.0.1:5173",
     )
     app_module = importlib.reload(api.app)
-    test_app: FastAPI = app_module.app
-    transport = httpx.ASGITransport(app=test_app)
+    transport = httpx.ASGITransport(app=app_module.app, raise_app_exceptions=False)
 
     async with httpx.AsyncClient(
         transport=transport,
@@ -98,7 +96,7 @@ async def test_cors_exposes_content_disposition_for_document_download(
     service.prepare_document_read.return_value = (
         "certificado.pdf", lambda: BytesIO(b"content")
     )
-    overrides = api.app.app.dependency_overrides
+    overrides = api.app.fastapi_app.dependency_overrides
     monkeypatch.setitem(overrides, get_current_user, lambda: object())
     monkeypatch.setitem(overrides, get_document_service, lambda: service)
     origin = "http://localhost:5173"
@@ -109,3 +107,31 @@ async def test_cors_exposes_content_disposition_for_document_download(
     assert "content-disposition" in response.headers
     assert response.headers["access-control-allow-origin"] == origin
     assert response.headers["access-control-expose-headers"] == "Content-Disposition"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "expected_origin"),
+    [
+        ("http://localhost:5173", "http://localhost:5173"),
+        ("https://example.com", None),
+    ],
+)
+async def test_cors_on_unhandled_document_error(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    origin: str,
+    expected_origin: str | None,
+) -> None:
+    service = Mock(spec=DocumentService)
+    open_reader = Mock(side_effect=OSError("storage unavailable"))
+    service.prepare_document_read.return_value = ("certificado.pdf", open_reader)
+    overrides = api.app.fastapi_app.dependency_overrides
+    monkeypatch.setitem(overrides, get_current_user, lambda: object())
+    monkeypatch.setitem(overrides, get_document_service, lambda: service)
+
+    response = await client.get(f"/documents/{uuid4()}/download", headers={"Origin": origin})
+
+    open_reader.assert_called_once_with()
+    assert response.status_code == 500
+    assert response.headers.get("access-control-allow-origin") == expected_origin

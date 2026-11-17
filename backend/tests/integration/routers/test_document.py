@@ -129,7 +129,7 @@ async def test_upload_closes_temporary_file_when_stream_exceeds_limit(
 
 
 def test_upload_openapi_declares_multipart_file_and_errors() -> None:
-    operation = app_module.app.openapi()["paths"]["/documents"]["post"]
+    operation = app_module.fastapi_app.openapi()["paths"]["/documents"]["post"]
     request_body = operation["requestBody"]
 
     assert request_body["required"] is True
@@ -153,7 +153,7 @@ def test_upload_openapi_declares_multipart_file_and_errors() -> None:
     ],
 )
 def test_document_openapi_declares_bearer_error(path: str, method: str) -> None:
-    error = app_module.app.openapi()["paths"][path][method]["responses"]["401"]
+    error = app_module.fastapi_app.openapi()["paths"][path][method]["responses"]["401"]
     assert error["headers"]["WWW-Authenticate"]["schema"]["example"] == "Bearer"
     detail = error["content"]["application/json"]["schema"]
     assert detail["required"] == ["detail"]
@@ -161,7 +161,7 @@ def test_document_openapi_declares_bearer_error(path: str, method: str) -> None:
 
 
 def test_delete_openapi_declares_not_found_and_uuid_validation() -> None:
-    responses = app_module.app.openapi()["paths"]["/documents/{document_id}"]["delete"]["responses"]
+    responses = app_module.fastapi_app.openapi()["paths"]["/documents/{document_id}"]["delete"]["responses"]
     assert "content" not in responses["204"]
     assert "422" in responses
     detail = responses["404"]["content"]["application/json"]["schema"]
@@ -203,8 +203,8 @@ async def test_read_releases_database_session_before_streaming(
     storage = Mock(spec=DocumentStorage)
     storage.open.side_effect = open_reader
     app = app_module.app
-    monkeypatch.setitem(app.dependency_overrides, get_db, document_database)
-    monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_db, document_database)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_document_storage, lambda: storage)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -234,9 +234,9 @@ async def test_read_does_not_open_file_when_session_close_fails(
         raise RuntimeError("database session close failed")
 
     app = app_module.app
-    monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: object())
-    monkeypatch.setitem(app.dependency_overrides, get_db, failing_database)
-    monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_current_user, lambda: object())
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_db, failing_database)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_document_storage, lambda: storage)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -346,7 +346,7 @@ async def test_stream_waits_for_inflight_read_on_disconnect() -> None:
 def test_read_openapi_declares_binary_response(
     action: str, media_types: set[str]
 ) -> None:
-    responses = app_module.app.openapi()["paths"][f"/documents/{{document_id}}/{action}"]["get"][
+    responses = app_module.fastapi_app.openapi()["paths"][f"/documents/{{document_id}}/{action}"]["get"][
         "responses"
     ]
 
@@ -368,7 +368,7 @@ async def client(
     monkeypatch: pytest.MonkeyPatch, service: Mock
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = app_module.app
-    monkeypatch.setitem(app.dependency_overrides, get_document_service, lambda: service)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_document_service, lambda: service)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -378,7 +378,7 @@ async def client(
 @pytest.fixture
 def authenticated(monkeypatch: pytest.MonkeyPatch, client: httpx.AsyncClient) -> None:
     user = User(id=uuid4(), email="employee@example.com", password_hash="hash")
-    monkeypatch.setitem(app_module.app.dependency_overrides, get_current_user, lambda: user)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_current_user, lambda: user)
 
 
 @pytest.fixture

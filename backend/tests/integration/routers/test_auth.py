@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app import app
+from api.app import app, fastapi_app
 from api.database import get_db
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
@@ -26,7 +26,7 @@ async def client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
-    app.dependency_overrides[get_db] = override_get_db
+    fastapi_app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(
@@ -35,7 +35,7 @@ async def client(
     ) as test_client:
         yield test_client
 
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 async def test_login_returns_access_token(

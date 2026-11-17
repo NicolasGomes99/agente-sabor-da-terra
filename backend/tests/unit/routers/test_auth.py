@@ -6,7 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from api.app import app
+from api.app import app, fastapi_app
 from api.dependencies import get_auth_service
 from api.models.user import User
 from api.services.auth import AuthService
@@ -15,7 +15,7 @@ from api.services.auth import AuthService
 @pytest.fixture
 def auth_service(monkeypatch: pytest.MonkeyPatch) -> Mock:
     service = Mock(spec=AuthService)
-    monkeypatch.setitem(app.dependency_overrides, get_auth_service, lambda: service)
+    monkeypatch.setitem(fastapi_app.dependency_overrides, get_auth_service, lambda: service)
     return service
 
 
