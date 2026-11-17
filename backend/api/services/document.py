@@ -1,6 +1,7 @@
 import logging
 from asyncio import CancelledError, create_task, shield, to_thread, wait
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
+from functools import partial
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
@@ -73,10 +74,11 @@ class DocumentService:
 
         return document
 
-    async def open_document(self, document_id: UUID) -> tuple[str, DocumentReader]:
+    async def prepare_document_read(
+        self, document_id: UUID
+    ) -> tuple[str, Callable[[], DocumentReader]]:
         document = await self._get_document(document_id)
-        reader = await to_thread(self.storage.open, document.storage_key)
-        return document.original_filename, reader
+        return document.original_filename, partial(self.storage.open, document.storage_key)
 
     async def delete_document(self, document_id: UUID) -> None:
         await _finish_write(self._delete_document(document_id))

@@ -54,10 +54,10 @@ async def _document_response(
     document_id: UUID, service: DocumentService, *, download: bool
 ) -> DocumentStreamResponse:
     try:
-        filename, reader = await service.open_document(document_id)
-    except (DocumentNotFoundError, FileNotFoundError) as error:
+        filename, open_reader = await service.prepare_document_read(document_id)
+    except DocumentNotFoundError as error:
         raise HTTPException(status_code=404, detail="Document not found.") from error
-    return DocumentStreamResponse(reader, filename, download=download)
+    return DocumentStreamResponse(open_reader, filename, download=download)
 
 
 @router.get(
