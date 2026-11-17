@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -60,7 +61,9 @@ def test_delete_removes_file_and_can_be_repeated(tmp_path: Path) -> None:
     storage.delete("key")
 
 
-@pytest.mark.parametrize("key", ["../arquivo", "pasta/arquivo", r"C:\arquivo"])
+@pytest.mark.parametrize(
+    "key", ["../arquivo", "pasta/arquivo", r"C:\arquivo", "NUL.pdf", "COM1", "LPT¹.txt"]
+)
 def test_operations_reject_invalid_keys(tmp_path: Path, key: str) -> None:
     storage = LocalDocumentStorage(tmp_path)
 
@@ -70,3 +73,16 @@ def test_operations_reject_invalid_keys(tmp_path: Path, key: str) -> None:
         storage.open(key)
     with pytest.raises(ValueError):
         storage.delete(key)
+
+
+def test_operations_accept_uuid_hex_key(tmp_path: Path) -> None:
+    storage = LocalDocumentStorage(tmp_path)
+    key = uuid4().hex
+
+    with BytesIO(b"content") as source:
+        storage.save(key, source)
+    with storage.open(key) as saved:
+        assert saved.read() == b"content"
+    storage.delete(key)
+
+    assert not (tmp_path / key).exists()

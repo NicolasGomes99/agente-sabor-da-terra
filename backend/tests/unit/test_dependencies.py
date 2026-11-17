@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -26,29 +28,45 @@ def test_get_document_storage_selects_local(
     monkeypatch.setenv("DOCUMENT_STORAGE_BACKEND", "local")
     monkeypatch.setenv("DOCUMENT_STORAGE_DIR", str(tmp_path))
     monkeypatch.delenv("DOCUMENT_STORAGE_BUCKET", raising=False)
+    monkeypatch.setattr(dependencies, "_gcs_client", None)
+    client_factory = Mock()
+    monkeypatch.setattr(dependencies, "Client", client_factory)
 
     storage = get_document_storage()
 
     assert isinstance(storage, LocalDocumentStorage)
     assert storage.directory == tmp_path.resolve()
+    client_factory.assert_not_called()
 
 
 def test_get_document_storage_selects_gcs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOCUMENT_STORAGE_BACKEND", "gcs")
     monkeypatch.setenv("DOCUMENT_STORAGE_BUCKET", "documents-bucket")
     monkeypatch.delenv("DOCUMENT_STORAGE_DIR", raising=False)
+    monkeypatch.setattr(dependencies, "_gcs_client", None)
     bucket = Mock(spec=Bucket)
     client = Mock(spec=Client)
     client.bucket.return_value = bucket
     client_factory = Mock(return_value=client)
     monkeypatch.setattr(dependencies, "Client", client_factory)
 
-    storage = get_document_storage()
+    start = Barrier(2, timeout=5)
 
-    assert isinstance(storage, GCSDocumentStorage)
-    assert storage.bucket is bucket
+    def select_storage() -> DocumentStorage:
+        start.wait()
+        return get_document_storage()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(select_storage)
+        second = executor.submit(select_storage)
+        for future in (first, second):
+            storage = future.result(timeout=5)
+            assert isinstance(storage, GCSDocumentStorage)
+            assert storage.bucket is bucket
     client_factory.assert_called_once_with()
-    client.bucket.assert_called_once_with("documents-bucket")
+    assert [entry.args for entry in client.bucket.call_args_list] == [
+        ("documents-bucket",), ("documents-bucket",)
+    ]
 
 
 def test_get_document_service_injects_session_and_storage() -> None:
