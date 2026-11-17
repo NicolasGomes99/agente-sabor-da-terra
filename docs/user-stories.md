@@ -153,14 +153,17 @@ Critérios de aceitação:
 
 Como funcionário, quero gerenciar os documentos da base para que o assistente possa consultá-los e citá-los nas respostas.
 
-Requisitos: RF28, RF29, RF38; RNF06.
+Requisitos: RF28, RF29, RF38; RNF01, RNF05, RNF06.
 
 Critérios de aceitação:
 
-- O funcionário pode adicionar um documento, ler seu conteúdo e baixar o arquivo original pela aplicação.
-- Após o processamento, o assistente pode consultar o documento adicionado e citá-lo nas respostas.
-- O funcionário pode excluir um documento sem citações. Se tentar excluir um documento citado, o sistema bloqueia a exclusão e informa qual vínculo impede a operação.
-- Após a exclusão de um documento importado, uma nova carga da mesma base preserva a exclusão.
+- O funcionário pode adicionar um documento, encontrá-lo na lista, abrir seu conteúdo e baixar o arquivo com o nome original.
+- O sistema só exibe o documento na lista depois de gravar o arquivo e salvar o registro.
+- O funcionário pode adicionar dois documentos com o mesmo nome. Em cada registro, pode abrir e baixar o arquivo correspondente.
+- O funcionário pode excluir um documento sem citações. O sistema remove o arquivo e retira o documento da lista.
+- O sistema bloqueia a exclusão de um documento citado, preserva o registro e o arquivo e informa ao funcionário qual citação impede a operação.
+- O assistente pode consultar e citar o documento adicionado após o processamento.
+- O sistema preserva as exclusões de documentos importados ao repetir a carga da mesma base.
 
 ## US12 - Gerenciar pedidos
 
