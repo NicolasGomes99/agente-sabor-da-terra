@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom'
 import { LoginPage } from '../features/auth/pages/LoginPage'
 import { useAuth } from '../features/auth/useAuth'
 import { ChatPage } from '../features/chat/pages/ChatPage'
+import { DocumentsPage } from '../features/documents/pages/DocumentsPage'
 
 function PublicRoute() {
   const { isAuthenticated } = useAuth()
@@ -30,6 +31,7 @@ export function AppRoutes() {
       </Route>
       <Route element={<ProtectedRoute />}>
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>

@@ -33,9 +33,13 @@ export function Sidebar() {
       </button>
 
       <nav className="sidebar-navigation" aria-label="Navegação principal">
-        <NavLink className="sidebar-nav-item active" to="/chat">
+        <NavLink className="sidebar-nav-item" to="/chat">
           <span aria-hidden="true">◌</span>
           Chat
+        </NavLink>
+        <NavLink className="sidebar-nav-item" to="/documents">
+          <span aria-hidden="true">▤</span>
+          Documentos
         </NavLink>
         {navigationItems.map((item) => (
           <button

@@ -1,0 +1,47 @@
+.documents-page {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 2rem);
+}
+
+.documents-page h1 {
+  margin: 0 0 1rem;
+}
+
+.documents-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.documents-list li {
+  padding: 0.875rem 1rem;
+  overflow-wrap: anywhere;
+}
+
+.documents-list li + li {
+  border-top: 1px solid var(--color-border);
+}
+
+.documents-error {
+  padding: 1rem;
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+
+.documents-error p {
+  margin: 0 0 0.75rem;
+}
+
+.documents-error button {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-surface);
+  background: var(--color-primary);
+  border: 0;
+  border-radius: var(--radius-sm);
+}
