@@ -96,8 +96,11 @@ async def test_reopen_session_returns_messages_in_order(
     response = await client.get(f"/chat/sessions/{session_id}", headers=headers)
 
     assert response.status_code == 200
-    contents = [m["content"] for m in response.json()["messages"]]
+    messages = response.json()["messages"]
+    contents = [m["content"] for m in messages]
+    positions = [m["position"] for m in messages]
     assert contents == ["primeira", "segunda", "terceira"]
+    assert positions == [1, 2, 3]
 
 
 @pytest.mark.asyncio

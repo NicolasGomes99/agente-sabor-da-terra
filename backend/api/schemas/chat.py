@@ -13,6 +13,7 @@ class MessageOut(BaseModel):
     id: UUID
     role: str
     content: str
+    position: int
     created_at: datetime
 
 class SessionOut(BaseModel):
