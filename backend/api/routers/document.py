@@ -8,16 +8,17 @@ from anyio import CancelScope
 from fastapi import (
     APIRouter,
     Depends,
-    File,
     HTTPException,
+    Request,
     Response,
-    UploadFile,
     status,
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from starlette.types import Receive, Scope, Send
+from starlette.datastructures import UploadFile
+from starlette.types import Message, Receive, Scope, Send
 
+from ..config import get_document_upload_max_bytes
 from ..dependencies import get_current_user, get_document_service
 from ..models.document import Document
 from ..schemas.document import DocumentResponse
@@ -65,17 +66,66 @@ async def list_documents(service: DocumentServiceDependency) -> list[Document]:
     return await service.list_documents()
 
 
-@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+def _upload_too_large() -> HTTPException:
+    return HTTPException(status_code=413, detail="Document upload exceeds the size limit.")
+
+
+def _limit_upload(request: Request, limit: int) -> Request:
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isascii() and content_length.isdecimal():
+        digits = content_length.lstrip("0")
+        maximum = str(limit)
+        if len(digits) > len(maximum) or (
+            len(digits) == len(maximum) and digits > maximum
+        ):
+            raise _upload_too_large()
+
+    received = 0
+
+    async def receive() -> Message:
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise _upload_too_large()
+        return message
+
+    return Request(request.scope, receive=receive)
+
+
+@router.post(
+    "",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={413: {"description": "Document upload exceeds the size limit."}},
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": {"file": {"type": "string", "format": "binary"}},
+                    }
+                }
+            },
+        }
+    },
+)
 async def create_document(
-    file: Annotated[UploadFile, File()], service: DocumentServiceDependency
+    request: Request, service: DocumentServiceDependency
 ) -> Document:
-    filename = file.filename
-    if not filename or not filename.strip():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A document filename is required.",
-        )
-    return await service.create_document(filename, file.file)
+    upload_request = _limit_upload(request, get_document_upload_max_bytes())
+    async with upload_request.form() as form:
+        file = form.get("file")
+        if not isinstance(file, UploadFile) or not file.filename or not file.filename.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="A document file with a filename is required.",
+            )
+        return await service.create_document(file.filename, file.file)
 
 
 async def _document_response(
