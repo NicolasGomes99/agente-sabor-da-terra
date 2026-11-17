@@ -6,7 +6,29 @@ from api.config import (
     get_document_storage_backend,
     get_document_storage_bucket,
     get_document_storage_dir,
+    get_document_upload_max_bytes,
 )
+
+
+def test_upload_limit_defaults_to_ten_mib(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOCUMENT_UPLOAD_MAX_BYTES", raising=False)
+
+    assert get_document_upload_max_bytes() == 10 * 1024**2
+
+
+@pytest.mark.parametrize("limit", [1, 30 * 1024**2])
+def test_upload_limit_accepts_bounds(monkeypatch: pytest.MonkeyPatch, limit: int) -> None:
+    monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", str(limit))
+
+    assert get_document_upload_max_bytes() == limit
+
+
+@pytest.mark.parametrize("value", ["", "invalid", "0", "-1", str(30 * 1024**2 + 1)])
+def test_upload_limit_rejects_invalid_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", value)
+
+    with pytest.raises(RuntimeError, match="DOCUMENT_UPLOAD_MAX_BYTES"):
+        get_document_upload_max_bytes()
 
 
 def test_storage_backend_defaults_to_local(monkeypatch: pytest.MonkeyPatch) -> None:

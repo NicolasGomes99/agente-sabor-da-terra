@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from io import BytesIO
+from tempfile import SpooledTemporaryFile
 from unittest.mock import Mock
 from urllib.parse import quote
 from uuid import uuid4
@@ -7,16 +8,119 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
+from starlette import formparsers
 
 from api import app as app_module
-from api.dependencies import get_current_user, get_document_service
+from api.dependencies import get_auth_service, get_current_user, get_document_service
 from api.models.document import Document
 from api.models.user import User
+from api.services.auth import AuthService, InvalidAccessTokenError
 from api.services.document import DocumentNotFoundError, DocumentService
 
 DOCUMENT_ID = uuid4()
 FILENAME = "certificação.pdf"
 CONTENT = b"%PDF-1.7 sample"
+MULTIPART_HEADERS = {"Content-Type": "multipart/form-data; boundary=test"}
+FILE_PART = (
+    b'--test\r\nContent-Disposition: form-data; name="file"; filename="test.pdf"\r\n'
+    b"Content-Type: application/pdf\r\n\r\n" + CONTENT
+)
+MULTIPART_BODY = FILE_PART + b"\r\n--test--\r\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", [None, "invalid-token"])
+async def test_upload_authenticates_before_reading_body(
+    client: httpx.AsyncClient, service: Mock, monkeypatch: pytest.MonkeyPatch, token: str | None
+) -> None:
+    auth = Mock(spec=AuthService)
+    auth.get_current_user.side_effect = InvalidAccessTokenError("invalid token")
+    monkeypatch.setitem(app_module.app.dependency_overrides, get_auth_service, lambda: auth)
+    headers = dict(MULTIPART_HEADERS)
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async def body() -> AsyncIterator[bytes]:
+        pytest.fail("The unauthorized request body was read.")
+        yield MULTIPART_BODY
+
+    response = await client.post("/documents", headers=headers, content=body())
+
+    assert response.status_code == 401
+    service.create_document.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("authenticated")
+async def test_upload_accepts_body_at_size_limit(
+    client: httpx.AsyncClient, service: Mock, document: Document, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", str(len(MULTIPART_BODY)))
+    service.create_document.return_value = document
+
+    response = await client.post("/documents", headers=MULTIPART_HEADERS, content=MULTIPART_BODY)
+
+    assert response.status_code == 201
+    service.create_document.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("authenticated")
+async def test_upload_rejects_oversized_content_length_before_reading_body(
+    client: httpx.AsyncClient, service: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", str(len(MULTIPART_BODY) - 1))
+    headers = {**MULTIPART_HEADERS, "Content-Length": str(len(MULTIPART_BODY))}
+
+    async def body() -> AsyncIterator[bytes]:
+        pytest.fail("The oversized request body was read.")
+        yield MULTIPART_BODY
+
+    response = await client.post("/documents", headers=headers, content=body())
+
+    assert response.status_code == 413
+    service.create_document.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("authenticated")
+async def test_upload_closes_temporary_file_when_stream_exceeds_limit(
+    client: httpx.AsyncClient, service: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOCUMENT_UPLOAD_MAX_BYTES", str(len(MULTIPART_BODY) - 1))
+    files = []
+
+    def track_temporary_file(*args, **kwargs):
+        # The parser owns this file. The test checks that the parser closes it.
+        file = SpooledTemporaryFile(*args, **kwargs)  # noqa: SIM115
+        files.append(file)
+        return file
+
+    temporary_file = Mock(side_effect=track_temporary_file)
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", temporary_file)
+
+    async def body() -> AsyncIterator[bytes]:
+        yield FILE_PART
+        temporary_file.assert_called_once()
+        yield MULTIPART_BODY[len(FILE_PART):]
+
+    response = await client.post("/documents", headers=MULTIPART_HEADERS, content=body())
+
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 413
+    assert files[0].closed
+    service.create_document.assert_not_awaited()
+
+
+def test_upload_openapi_declares_multipart_file_and_size_error() -> None:
+    operation = app_module.app.openapi()["paths"]["/documents"]["post"]
+    request_body = operation["requestBody"]
+
+    assert request_body["required"] is True
+    schema = request_body["content"]["multipart/form-data"]["schema"]
+    assert schema["required"] == ["file"]
+    assert schema["properties"]["file"] == {"type": "string", "format": "binary"}
+    assert "413" in operation["responses"]
 
 
 @pytest.fixture
