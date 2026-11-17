@@ -3,8 +3,22 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
+import { DocumentPreview } from '../components/DocumentPreview'
 import { listDocuments, uploadDocument, type DocumentRecord } from '../documentsApi'
 import './documents.css'
+
+const textExtensions = new Set(['txt', 'md', 'csv', 'json'])
+const mediaExtensions = new Set(['pdf', 'gif', 'jpg', 'jpeg', 'png', 'webp'])
+
+function fileExtension(filename: string) {
+  const separator = filename.lastIndexOf('.')
+  return separator === -1 ? '' : filename.slice(separator + 1).toLowerCase()
+}
+
+function canPreviewDocument(filename: string) {
+  const extension = fileExtension(filename)
+  return textExtensions.has(extension) || mediaExtensions.has(extension)
+}
 
 type ListState =
   | { status: 'loading' }
@@ -15,6 +29,7 @@ export function DocumentsPage() {
   const { logout } = useAuth()
   const [state, setState] = useState<ListState>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
+  const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -120,10 +135,25 @@ export function DocumentsPage() {
           ) : (
             <ul className="documents-list" aria-label="Arquivos cadastrados">
               {state.documents.map((document) => (
-                <li key={document.id}>{document.original_filename}</li>
+                <li key={document.id}>
+                  <span>{document.original_filename}</span>
+                  {canPreviewDocument(document.original_filename) && (
+                    <button type="button" onClick={() => setSelectedDocument(document)}>
+                      Abrir
+                    </button>
+                  )}
+                </li>
               ))}
             </ul>
           )
+        )}
+        {selectedDocument && (
+          <DocumentPreview
+            key={selectedDocument.id}
+            document={selectedDocument}
+            asText={textExtensions.has(fileExtension(selectedDocument.original_filename))}
+            onClose={() => setSelectedDocument(null)}
+          />
         )}
       </section>
     </AppShell>

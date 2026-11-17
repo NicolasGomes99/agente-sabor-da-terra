@@ -53,7 +53,55 @@
 }
 
 .documents-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.875rem 1rem;
+  overflow-wrap: anywhere;
+}
+
+.document-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.document-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.document-preview h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.document-preview iframe {
+  width: 100%;
+  height: min(65vh, 48rem);
+  border: 0;
+}
+
+.document-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 65vh;
+  margin-inline: auto;
+  object-fit: contain;
+}
+
+.document-preview pre {
+  max-height: 65vh;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -73,6 +121,8 @@
 }
 
 .documents-error button,
+.documents-list button,
+.document-preview button,
 .documents-upload button {
   padding: 0.5rem 0.75rem;
   color: var(--color-surface);
