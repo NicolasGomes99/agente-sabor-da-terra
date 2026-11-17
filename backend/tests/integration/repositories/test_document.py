@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.document import Document
 from api.repositories.document import DocumentRepository
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-@pytest.mark.asyncio
+
 async def test_create_preserves_document_fields(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
 
@@ -18,14 +19,12 @@ async def test_create_preserves_document_fields(db_session: AsyncSession) -> Non
     assert document.storage_key == "key-1"
 
 
-@pytest.mark.asyncio
 async def test_list_all_returns_empty_list(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
 
     assert await repository.list_all() == []
 
 
-@pytest.mark.asyncio
 async def test_list_all_orders_by_filename_then_id(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
     first_id = UUID(int=1)
@@ -43,7 +42,6 @@ async def test_list_all_orders_by_filename_then_id(db_session: AsyncSession) -> 
     assert [document.id for document in documents] == [first_id, second_id, last_id]
 
 
-@pytest.mark.asyncio
 async def test_get_by_id_finds_document(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
     document = await repository.create("certificado.pdf", "key-1")
@@ -56,14 +54,12 @@ async def test_get_by_id_finds_document(db_session: AsyncSession) -> None:
     assert result.id == document_id
 
 
-@pytest.mark.asyncio
 async def test_get_by_id_returns_none_for_unknown_id(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
 
     assert await repository.get_by_id(uuid4()) is None
 
 
-@pytest.mark.asyncio
 async def test_delete_removes_only_selected_document(db_session: AsyncSession) -> None:
     repository = DocumentRepository(db_session)
     document = await repository.create("certificado.pdf", "key-1")

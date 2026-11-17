@@ -11,6 +11,8 @@ from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
 TEST_SECRET_KEY = "test-secret-key-with-at-least-32-bytes-long"
 
 
@@ -36,7 +38,6 @@ async def client(
     app.dependency_overrides.clear()
 
 
-@pytest.mark.asyncio
 async def test_login_returns_access_token(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -65,7 +66,6 @@ async def test_login_returns_access_token(
     assert auth_service.decode_access_token(response_data["access_token"]) == user.id
 
 
-@pytest.mark.asyncio
 async def test_login_rejects_invalid_credentials(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -93,7 +93,6 @@ async def test_login_rejects_invalid_credentials(
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.asyncio
 async def test_login_rejects_invalid_request_body(
     client: httpx.AsyncClient,
 ) -> None:

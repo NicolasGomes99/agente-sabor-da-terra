@@ -5,6 +5,8 @@ from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
 
 def build_auth_service(session: AsyncSession) -> AuthService:
     repository = UserRepository(session)
@@ -15,7 +17,6 @@ def build_auth_service(session: AsyncSession) -> AuthService:
     )
 
 
-@pytest.mark.asyncio
 async def test_authenticate_user_returns_persisted_user(
     db_session: AsyncSession,
 ) -> None:
@@ -33,7 +34,6 @@ async def test_authenticate_user_returns_persisted_user(
     assert result is user
 
 
-@pytest.mark.asyncio
 async def test_authenticate_user_returns_none_for_wrong_password(
     db_session: AsyncSession,
 ) -> None:
@@ -51,7 +51,6 @@ async def test_authenticate_user_returns_none_for_wrong_password(
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_get_current_user_returns_user_from_access_token(
     db_session: AsyncSession,
 ) -> None:

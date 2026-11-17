@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Document
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-@pytest.mark.asyncio
+
 async def test_document_persists_with_generated_uuid(db_session: AsyncSession) -> None:
     document = Document(original_filename="certificado.pdf", storage_key="key-1")
     db_session.add(document)
@@ -24,7 +25,6 @@ async def test_document_persists_with_generated_uuid(db_session: AsyncSession) -
     assert persisted_document.storage_key == "key-1"
 
 
-@pytest.mark.asyncio
 async def test_documents_can_share_original_filename(db_session: AsyncSession) -> None:
     first = Document(original_filename="certificado.pdf", storage_key="key-1")
     second = Document(original_filename="certificado.pdf", storage_key="key-2")
@@ -46,7 +46,6 @@ async def test_documents_can_share_original_filename(db_session: AsyncSession) -
     assert persisted_second.storage_key == "key-2"
 
 
-@pytest.mark.asyncio
 async def test_duplicate_storage_key_is_rejected(db_session: AsyncSession) -> None:
     db_session.add(Document(original_filename="certificado.pdf", storage_key="key-1"))
     await db_session.flush()
