@@ -1,40 +1,44 @@
-from collections.abc import Generator
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
+import pytest_asyncio
 
-from api.app import app
+from api.app import app, fastapi_app
 from api.dependencies import get_auth_service
 from api.models.user import User
 from api.services.auth import AuthService
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    app.dependency_overrides[get_auth_service] = lambda: Mock(
-        spec=AuthService
-    )
-    with TestClient(app) as test_client:
+def auth_service(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    service = Mock(spec=AuthService)
+    monkeypatch.setitem(fastapi_app.dependency_overrides, get_auth_service, lambda: service)
+    return service
+
+
+@pytest_asyncio.fixture
+async def client(auth_service: Mock) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as test_client:
         yield test_client
-    app.dependency_overrides.clear()
 
 
-def test_login_returns_access_token(
-    client: TestClient,
+@pytest.mark.asyncio
+async def test_login_returns_access_token(
+    client: httpx.AsyncClient, auth_service: Mock,
 ) -> None:
     user = User(
         id=uuid4(),
         email="employee@example.com",
         password_hash="hash",
     )
-    auth_service = Mock(spec=AuthService)
     auth_service.authenticate_user = AsyncMock(return_value=user)
     auth_service.create_access_token.return_value = "access-token"
-    app.dependency_overrides[get_auth_service] = lambda: auth_service
-
-    response = client.post(
+    response = await client.post(
         "/auth/login",
         json={"email": "employee@example.com", "password": "secret"},
     )
@@ -51,12 +55,12 @@ def test_login_returns_access_token(
     auth_service.create_access_token.assert_called_once_with(user.id)
 
 
-def test_login_rejects_invalid_credentials(client: TestClient) -> None:
-    auth_service = Mock(spec=AuthService)
+@pytest.mark.asyncio
+async def test_login_rejects_invalid_credentials(
+    client: httpx.AsyncClient, auth_service: Mock
+) -> None:
     auth_service.authenticate_user = AsyncMock(return_value=None)
-    app.dependency_overrides[get_auth_service] = lambda: auth_service
-
-    response = client.post(
+    response = await client.post(
         "/auth/login",
         json={"email": "employee@example.com", "password": "wrong"},
     )
@@ -67,8 +71,9 @@ def test_login_rejects_invalid_credentials(client: TestClient) -> None:
     auth_service.create_access_token.assert_not_called()
 
 
-def test_login_rejects_invalid_request_body(client: TestClient) -> None:
-    response = client.post(
+@pytest.mark.asyncio
+async def test_login_rejects_invalid_request_body(client: httpx.AsyncClient) -> None:
+    response = await client.post(
         "/auth/login",
         json={"email": "", "password": ""},
     )

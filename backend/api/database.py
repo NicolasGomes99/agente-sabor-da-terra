@@ -1,5 +1,5 @@
+from collections.abc import AsyncGenerator
 from functools import lru_cache
-from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,

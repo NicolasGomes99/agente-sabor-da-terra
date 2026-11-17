@@ -5,8 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.repositories.user import UserRepository
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-@pytest.mark.asyncio
+
 async def test_create_persists_normalized_user(
     db_session: AsyncSession,
 ) -> None:
@@ -22,7 +23,6 @@ async def test_create_persists_normalized_user(
     assert user.password_hash == "password-hash"
 
 
-@pytest.mark.asyncio
 async def test_get_by_email_finds_user_case_insensitively(
     db_session: AsyncSession,
 ) -> None:
@@ -37,7 +37,6 @@ async def test_get_by_email_finds_user_case_insensitively(
     assert result is created_user
 
 
-@pytest.mark.asyncio
 async def test_get_by_email_returns_none_for_unknown_email(
     db_session: AsyncSession,
 ) -> None:
@@ -48,7 +47,6 @@ async def test_get_by_email_returns_none_for_unknown_email(
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_get_by_id_finds_user(db_session: AsyncSession) -> None:
     repository = UserRepository(db_session)
     created_user = await repository.create(
@@ -61,7 +59,6 @@ async def test_get_by_id_finds_user(db_session: AsyncSession) -> None:
     assert result is created_user
 
 
-@pytest.mark.asyncio
 async def test_get_by_id_returns_none_for_unknown_id(
     db_session: AsyncSession,
 ) -> None:

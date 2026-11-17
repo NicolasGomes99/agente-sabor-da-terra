@@ -25,6 +25,7 @@ backend/
     repositories/
     schemas/
     services/
+    storage/
     routers/
     dependencies.py
     agents/
@@ -41,6 +42,8 @@ Os routers recebem as requisições e delegam aos serviços. Os schemas definem 
 
 A estrutura prevista em `agents/` tem o orquestrador em `agent.py`, que expõe o `root_agent`, e os agentes especializados em `triage/` e `consultation/`. No chat livre, o orquestrador encaminha a conversa conforme a intenção. Nas tarefas da fila de triagem, o backend já indica o fluxo. A escolha do modelo de IA está em aberto.
 
+O serviço de documentos usa os adaptadores de `storage/` para gravar, abrir e excluir arquivos.
+
 ## Ambiente local
 
 Suba uma instância local do PostgreSQL separadamente enquanto o Compose e os Dockerfiles estão em preparação.
@@ -50,6 +53,10 @@ Suba uma instância local do PostgreSQL separadamente enquanto o Compose e os Do
 | `DATABASE_URL` | Conexão do backend e do Alembic com o PostgreSQL, no formato `postgresql+asyncpg://usuario:senha@localhost:5432/banco`. |
 | `JWT_SECRET_KEY` | Chave usada pela API para assinar e validar os tokens. |
 | `CORS_ALLOWED_ORIGINS` | Origens da SPA aceitas pela API, separadas por vírgulas. Em desenvolvimento, use a origem aberta no navegador, como `http://localhost:5173`. |
+| `DOCUMENT_STORAGE_BACKEND` | Armazenamento de documentos. Aceita `local` (padrão) ou `gcs`. |
+| `DOCUMENT_STORAGE_DIR` | Diretório obrigatório no modo `local`. Caminhos relativos partem do diretório de execução da API. A primeira gravação cria o diretório se ele ainda estiver ausente. |
+| `DOCUMENT_STORAGE_BUCKET` | Nome do bucket privado, obrigatório no modo `gcs`. |
+| `DOCUMENT_UPLOAD_MAX_BYTES` | Limite do corpo multipart inteiro, em bytes. Aceita inteiros de 1 a 31.457.280. O padrão é 10.485.760 bytes (10 MiB). A API retorna HTTP `413` quando o corpo ultrapassa o limite. |
 | `VITE_API_URL` | URL da API usada pela SPA. O padrão é `http://localhost:8000`. |
 
 Em `backend/`, rode `uv sync`, aplique as migrações com `uv run alembic upgrade head` e suba a API com `uv run uvicorn api.app:app --reload`. Em `frontend/`, rode `npm ci` e `npm run dev`.
@@ -58,7 +65,8 @@ Quando um model mudar o esquema do banco, gere uma revisão em `backend/` com `u
 
 ## Verificações
 
-- Em `backend/`, rode `uv run ruff check .` e `uv run pytest`. Os testes de integração usam PostgreSQL via Testcontainers e precisam do Docker em execução.
+- Em `backend/`, rode `uv run ruff check .` e `uv run pytest`. Os testes de integração que acessam PostgreSQL usam Testcontainers e precisam do Docker em execução.
+- Para rodar apenas a regressão de documentos, execute `uv run pytest tests/integration/routers/test_document_flow.py` em `backend/` com o Docker em execução. O teste aplica as migrações em um banco descartável, obtém o JWT pela rota de login e verifica o fluxo com armazenamento local. Ao final, valida o downgrade e reaplica a migração.
 - Em `frontend/`, rode `npm run lint`, `npm test` e `npm run build`. O build também verifica os tipos do TypeScript.
 
 ## Publicação
