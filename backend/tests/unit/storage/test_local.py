@@ -61,6 +61,21 @@ def test_delete_removes_file_and_can_be_repeated(tmp_path: Path) -> None:
     storage.delete("key")
 
 
+def test_delete_allows_open_reader_to_finish(tmp_path: Path) -> None:
+    storage = LocalDocumentStorage(tmp_path)
+    prefix = b"prefix-"
+    remainder = b"content" * 16_384
+    with BytesIO(prefix + remainder) as source:
+        storage.save("key", source)
+
+    with storage.open("key") as reader:
+        assert reader.read(len(prefix)) == prefix
+        storage.delete("key")
+        assert reader.read() == remainder
+
+    assert not (tmp_path / "key").exists()
+
+
 @pytest.mark.parametrize(
     "key", ["../arquivo", "pasta/arquivo", r"C:\arquivo", "NUL.pdf", "COM1", "LPT¹.txt"]
 )
