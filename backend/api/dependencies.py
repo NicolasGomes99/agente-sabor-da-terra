@@ -1,3 +1,4 @@
+from threading import Lock
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -22,6 +23,16 @@ from .storage.gcs import GCSDocumentStorage
 from .storage.local import LocalDocumentStorage
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+_gcs_client_lock = Lock()
+_gcs_client: Client | None = None
+
+
+def _get_gcs_client() -> Client:
+    global _gcs_client
+    with _gcs_client_lock:
+        if _gcs_client is None:
+            _gcs_client = Client()
+        return _gcs_client
 
 
 def get_auth_service(
@@ -37,8 +48,7 @@ def get_document_storage() -> DocumentStorage:
         return LocalDocumentStorage(get_document_storage_dir())
 
     bucket_name = get_document_storage_bucket()
-    client = Client()
-    return GCSDocumentStorage(client.bucket(bucket_name))
+    return GCSDocumentStorage(_get_gcs_client().bucket(bucket_name))
 
 
 def get_document_service(
