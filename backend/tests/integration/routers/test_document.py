@@ -128,7 +128,7 @@ async def test_upload_closes_temporary_file_when_stream_exceeds_limit(
     service.create_document.assert_not_awaited()
 
 
-def test_upload_openapi_declares_multipart_file_and_size_error() -> None:
+def test_upload_openapi_declares_multipart_file_and_errors() -> None:
     operation = app_module.app.openapi()["paths"]["/documents"]["post"]
     request_body = operation["requestBody"]
 
@@ -137,6 +137,36 @@ def test_upload_openapi_declares_multipart_file_and_size_error() -> None:
     assert schema["required"] == ["file"]
     assert schema["properties"]["file"] == {"type": "string", "format": "binary"}
     assert "413" in operation["responses"]
+    detail = operation["responses"]["422"]["content"]["application/json"]["schema"]
+    assert detail["required"] == ["detail"]
+    assert detail["properties"]["detail"] == {"type": "string"}
+
+
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/documents", "get"),
+        ("/documents", "post"),
+        ("/documents/{document_id}/content", "get"),
+        ("/documents/{document_id}/download", "get"),
+        ("/documents/{document_id}", "delete"),
+    ],
+)
+def test_document_openapi_declares_bearer_error(path: str, method: str) -> None:
+    error = app_module.app.openapi()["paths"][path][method]["responses"]["401"]
+    assert error["headers"]["WWW-Authenticate"]["schema"]["example"] == "Bearer"
+    detail = error["content"]["application/json"]["schema"]
+    assert detail["required"] == ["detail"]
+    assert detail["properties"]["detail"] == {"type": "string"}
+
+
+def test_delete_openapi_declares_not_found_and_uuid_validation() -> None:
+    responses = app_module.app.openapi()["paths"]["/documents/{document_id}"]["delete"]["responses"]
+    assert "content" not in responses["204"]
+    assert "422" in responses
+    detail = responses["404"]["content"]["application/json"]["schema"]
+    assert detail["required"] == ["detail"]
+    assert detail["properties"]["detail"] == {"type": "string"}
 
 
 @pytest.mark.asyncio
