@@ -1,7 +1,9 @@
 import asyncio
 import subprocess
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import BinaryIO
 
 import httpx
 import pytest
@@ -13,6 +15,7 @@ from api import database
 from api.app import app
 from api.models import Document, User
 from api.services.auth import AuthService
+from api.storage.local import LocalDocumentStorage
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
@@ -61,9 +64,35 @@ async def test_document_flow_on_migrated_database(
 
                 filename = "certificado.pdf"
                 payloads = (b"%PDF-1.7 first", b"%PDF-1.7 second")
+                first_upload = client.build_request(
+                    "POST", "/documents", files={"file": (filename, payloads[0])}
+                )
+                multipart = first_upload.read()
+                checkouts = []
+                save = LocalDocumentStorage.save
+
+                async def body() -> AsyncIterator[bytes]:
+                    checkouts.append(("multipart", engine.pool.checkedout()))
+                    yield multipart
+
+                def save_and_measure(storage: LocalDocumentStorage, key: str, source: BinaryIO) -> None:
+                    checkouts.append(("save", engine.pool.checkedout()))
+                    save(storage, key, source)
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(LocalDocumentStorage, "save", save_and_measure)
+                    first_response = await client.post(
+                        "/documents",
+                        headers={"Content-Type": first_upload.headers["Content-Type"]},
+                        content=body(),
+                    )
+                assert checkouts == [("multipart", 0), ("save", 0)]
+
+                second_response = await client.post(
+                    "/documents", files={"file": (filename, payloads[1])}
+                )
                 documents = []
-                for payload in payloads:
-                    upload = await client.post("/documents", files={"file": (filename, payload)})
+                for upload in (first_response, second_response):
                     assert upload.status_code == 201
                     document = upload.json()
                     assert document == {"id": document["id"], "original_filename": filename}

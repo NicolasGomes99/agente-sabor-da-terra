@@ -14,9 +14,9 @@ from starlette.requests import ClientDisconnect
 from starlette.types import Message
 
 from api import app as app_module
+from api import database, dependencies
 from api.database import get_db
 from api.dependencies import (
-    get_auth_service,
     get_current_user,
     get_document_service,
     get_document_storage,
@@ -47,7 +47,9 @@ async def test_upload_authenticates_before_reading_body(
 ) -> None:
     auth = Mock(spec=AuthService)
     auth.get_current_user.side_effect = InvalidAccessTokenError("invalid token")
-    monkeypatch.setitem(app_module.app.dependency_overrides, get_auth_service, lambda: auth)
+    session = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(database, "get_session_maker", lambda: lambda: session)
+    monkeypatch.setattr(dependencies, "_build_auth_service", lambda session: auth)
     headers = dict(MULTIPART_HEADERS)
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
@@ -145,10 +147,14 @@ async def test_read_releases_database_session_before_streaming(
     monkeypatch.setenv("JWT_SECRET_KEY", secret)
     token = AuthService(Mock(spec=UserService), secret_key=secret).create_access_token(user.id)
     session = Mock(spec=AsyncSession)
-    session.get.side_effect = [user, document]
+    session.get.return_value = document
+    auth_session = AsyncMock(spec=AsyncSession)
+    auth_session.__aenter__.return_value = auth_session
+    auth_session.get.return_value = user
+    monkeypatch.setattr(database, "get_session_maker", lambda: lambda: auth_session)
     lifecycle: list[str] = []
 
-    async def database() -> AsyncIterator[AsyncSession]:
+    async def document_database() -> AsyncIterator[AsyncSession]:
         lifecycle.append("open")
         try:
             yield session
@@ -157,6 +163,7 @@ async def test_read_releases_database_session_before_streaming(
 
     class SessionCheckingReader(BytesIO):
         def read(self, size: int = -1, /) -> bytes:
+            auth_session.__aexit__.assert_awaited_once()
             assert lifecycle == ["open", "close"]
             return super().read(size)
 
@@ -164,7 +171,7 @@ async def test_read_releases_database_session_before_streaming(
     storage = Mock(spec=DocumentStorage)
     storage.open.return_value = reader
     app = app_module.app
-    monkeypatch.setitem(app.dependency_overrides, get_db, database)
+    monkeypatch.setitem(app.dependency_overrides, get_db, document_database)
     monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
 
     async with httpx.AsyncClient(
@@ -177,9 +184,8 @@ async def test_read_releases_database_session_before_streaming(
     assert response.status_code == 200
     assert response.content == CONTENT
     assert reader.closed
-    assert [call.args for call in session.get.await_args_list] == [
-        (User, user.id), (Document, document.id)
-    ]
+    auth_session.get.assert_awaited_once_with(User, user.id)
+    session.get.assert_awaited_once_with(Document, document.id)
 
 
 @pytest.mark.asyncio
