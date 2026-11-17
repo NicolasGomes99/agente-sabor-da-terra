@@ -1,4 +1,13 @@
+from asyncio import (
+    CancelledError,
+    Event,
+    create_task,
+    get_running_loop,
+    sleep,
+    wait_for,
+)
 from io import BytesIO
+from threading import Event as ThreadEvent
 from unittest.mock import Mock, call
 from uuid import uuid4
 
@@ -70,13 +79,15 @@ async def test_create_stops_when_storage_fails(service, operations, document):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize("secondary_failure", [None, "rollback", "cleanup"])
 async def test_create_rolls_back_and_cleans_up_after_insert_failure(
-    service, operations, document, cleanup_fails, caplog
+    service, operations, document, secondary_failure, caplog
 ):
     error = RuntimeError("insert failed")
     operations.repository.create.side_effect = error
-    if cleanup_fails:
+    if secondary_failure == "rollback":
+        operations.session.rollback.side_effect = RuntimeError("rollback failed")
+    if secondary_failure == "cleanup":
         operations.storage.delete.side_effect = OSError("cleanup failed")
 
     with BytesIO(b"content") as source, pytest.raises(RuntimeError) as raised:
@@ -90,8 +101,29 @@ async def test_create_rolls_back_and_cleans_up_after_insert_failure(
         call.session.rollback(),
         call.storage.delete(key),
     ]
-    if cleanup_fails:
+    if secondary_failure == "rollback":
+        assert "Failed to roll back document transaction" in caplog.text
+    if secondary_failure == "cleanup":
         assert "Failed to clean up document file" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_create_preserves_file_after_commit_failure(service, operations, document, caplog):
+    error = RuntimeError("commit failed")
+    operations.session.commit.side_effect = error
+
+    with BytesIO(b"content") as source, pytest.raises(RuntimeError) as raised:
+        await service.create_document(document.original_filename, source)
+
+    assert raised.value is error
+    key = operations.storage.save.call_args.args[0]
+    assert operations.mock_calls == [
+        call.storage.save(key, source),
+        call.repository.create(document.original_filename, key),
+        call.session.commit(),
+        call.session.rollback(),
+    ]
+    assert key in caplog.text
 
 
 @pytest.mark.asyncio
@@ -124,7 +156,7 @@ async def test_unknown_id_stops_before_accessing_storage(service, operations, me
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_record_and_file_before_commit(service, operations, document):
+async def test_delete_commits_record_before_removing_file(service, operations, document):
     operations.repository.get_by_id.return_value = document
 
     await service.delete_document(document.id)
@@ -132,8 +164,8 @@ async def test_delete_removes_record_and_file_before_commit(service, operations,
     assert operations.mock_calls == [
         call.repository.get_by_id(document.id),
         call.repository.delete(document),
-        call.storage.delete(document.storage_key),
         call.session.commit(),
+        call.storage.delete(document.storage_key),
     ]
 
 
@@ -142,11 +174,10 @@ async def test_delete_removes_record_and_file_before_commit(service, operations,
     ("component", "method", "expected_calls"),
     [
         ("repository", "delete", ["repository.delete"]),
-        ("storage", "delete", ["repository.delete", "storage.delete"]),
-        ("session", "commit", ["repository.delete", "storage.delete", "session.commit"]),
+        ("session", "commit", ["repository.delete", "session.commit"]),
     ],
 )
-async def test_delete_rolls_back_when_an_operation_fails(
+async def test_delete_preserves_file_when_database_operation_fails(
     service, operations, document, component, method, expected_calls
 ):
     error = RuntimeError("delete failed")
@@ -162,3 +193,65 @@ async def test_delete_rolls_back_when_an_operation_fails(
         *expected_calls,
         "session.rollback",
     ]
+
+
+@pytest.mark.asyncio
+async def test_delete_logs_storage_failure_after_commit(service, operations, document, caplog):
+    error = OSError("delete failed")
+    operations.repository.get_by_id.return_value = document
+    operations.storage.delete.side_effect = error
+
+    with pytest.raises(OSError) as raised:
+        await service.delete_document(document.id)
+
+    assert raised.value is error
+    assert operations.mock_calls == [
+        call.repository.get_by_id(document.id),
+        call.repository.delete(document),
+        call.session.commit(),
+        call.storage.delete(document.storage_key),
+    ]
+    assert str(document.id) in caplog.text
+    assert document.storage_key in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "delete"])
+async def test_cancelled_write_waits_for_storage_worker(service, operations, document, operation):
+    loop = get_running_loop()
+    started = Event()
+    release = ThreadEvent()
+    finished = ThreadEvent()
+
+    def block_storage(*args):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=5)
+        if operation == "save":
+            assert args[1].read() == b"content"
+        finished.set()
+
+    getattr(operations.storage, operation).side_effect = block_storage
+    operations.repository.get_by_id.return_value = document
+
+    with BytesIO(b"content") as source:
+        if operation == "save":
+            task = create_task(service.create_document(document.original_filename, source))
+        else:
+            task = create_task(service.delete_document(document.id))
+
+        try:
+            await wait_for(started.wait(), timeout=5)
+            task.cancel()
+            await sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+            with pytest.raises(CancelledError):
+                await wait_for(task, timeout=5)
+
+    assert finished.is_set()
+    assert [entry[0] for entry in operations.mock_calls] == (
+        ["storage.save", "repository.create", "session.commit"]
+        if operation == "save"
+        else ["repository.get_by_id", "repository.delete", "session.commit", "storage.delete"]
+    )
