@@ -1,21 +1,33 @@
 from collections.abc import AsyncIterator
 from io import BytesIO
 from tempfile import SpooledTemporaryFile
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import formparsers
+from starlette.requests import ClientDisconnect
+from starlette.types import Message
 
 from api import app as app_module
-from api.dependencies import get_auth_service, get_current_user, get_document_service
+from api.database import get_db
+from api.dependencies import (
+    get_auth_service,
+    get_current_user,
+    get_document_service,
+    get_document_storage,
+)
 from api.models.document import Document
 from api.models.user import User
+from api.routers.document import DocumentStreamResponse
 from api.services.auth import AuthService, InvalidAccessTokenError
 from api.services.document import DocumentNotFoundError, DocumentService
+from api.services.user import UserService
+from api.storage.base import DocumentStorage
 
 DOCUMENT_ID = uuid4()
 FILENAME = "certificação.pdf"
@@ -123,6 +135,97 @@ def test_upload_openapi_declares_multipart_file_and_size_error() -> None:
     assert "413" in operation["responses"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["content", "download"])
+async def test_read_releases_database_session_before_streaming(
+    monkeypatch: pytest.MonkeyPatch, document: Document, action: str
+) -> None:
+    user = User(id=uuid4(), email="employee@example.com", password_hash="hash")
+    secret = "test-only-secret-for-document-streaming"
+    monkeypatch.setenv("JWT_SECRET_KEY", secret)
+    token = AuthService(Mock(spec=UserService), secret_key=secret).create_access_token(user.id)
+    session = Mock(spec=AsyncSession)
+    session.get.side_effect = [user, document]
+    lifecycle: list[str] = []
+
+    async def database() -> AsyncIterator[AsyncSession]:
+        lifecycle.append("open")
+        try:
+            yield session
+        finally:
+            lifecycle.append("close")
+
+    class SessionCheckingReader(BytesIO):
+        def read(self, size: int = -1, /) -> bytes:
+            assert lifecycle == ["open", "close"]
+            return super().read(size)
+
+    reader = SessionCheckingReader(CONTENT)
+    storage = Mock(spec=DocumentStorage)
+    storage.open.return_value = reader
+    app = app_module.app
+    monkeypatch.setitem(app.dependency_overrides, get_db, database)
+    monkeypatch.setitem(app.dependency_overrides, get_document_storage, lambda: storage)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/documents/{document.id}/{action}", headers={"Authorization": f"Bearer {token}"}
+        )
+
+    assert response.status_code == 200
+    assert response.content == CONTENT
+    assert reader.closed
+    assert [call.args for call in session.get.await_args_list] == [
+        (User, user.id), (Document, document.id)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_reader_when_send_fails() -> None:
+    reader = BytesIO(CONTENT * 10_000)
+    response = DocumentStreamResponse(reader, FILENAME, download=True)
+    sent_chunks: list[bytes] = []
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.body":
+            if sent_chunks:
+                raise OSError("client disconnected")
+            sent_chunks.append(message["body"])
+
+    with pytest.raises(ClientDisconnect):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), send)
+
+    assert sent_chunks
+    assert reader.closed
+
+
+@pytest.mark.parametrize(
+    ("action", "media_types"),
+    [
+        ("content", {
+            "application/octet-stream", "application/pdf", "image/gif",
+            "image/jpeg", "image/png", "image/webp",
+        }),
+        ("download", {"application/octet-stream"}),
+    ],
+)
+def test_read_openapi_declares_binary_response(
+    action: str, media_types: set[str]
+) -> None:
+    responses = app_module.app.openapi()["paths"][f"/documents/{{document_id}}/{action}"]["get"][
+        "responses"
+    ]
+
+    assert responses["200"]["content"] == {
+        media_type: {"schema": {"type": "string", "format": "binary"}}
+        for media_type in media_types
+    }
+    assert responses["200"]["headers"]["Content-Disposition"]["schema"] == {"type": "string"}
+    assert "404" in responses
+
+
 @pytest.fixture
 def service() -> Mock:
     return Mock(spec=DocumentService)
@@ -225,6 +328,7 @@ async def test_upload_rejects_missing_file_or_blank_filename(
     ("action", "filename", "content_type", "disposition"),
     [
         ("content", FILENAME, "application/pdf", "inline"),
+        ("content", "certificado.pdf.gz", "application/octet-stream", "attachment"),
         ("content", "documento.html", "application/octet-stream", "attachment"),
         ("download", FILENAME, "application/octet-stream", "attachment"),
     ],
