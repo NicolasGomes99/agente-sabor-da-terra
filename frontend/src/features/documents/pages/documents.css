@@ -54,11 +54,31 @@
 
 .documents-list li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.875rem 1rem;
   overflow-wrap: anywhere;
+}
+
+.document-list-name {
+  min-width: 0;
+}
+
+.document-list-name p {
+  margin: 0.25rem 0 0;
+  color: var(--color-danger);
+}
+
+.document-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.document-list-actions button:disabled {
+  opacity: 0.6;
 }
 
 .document-preview {

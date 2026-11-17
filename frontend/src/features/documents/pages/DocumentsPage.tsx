@@ -4,7 +4,12 @@ import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
 import { DocumentPreview } from '../components/DocumentPreview'
-import { listDocuments, uploadDocument, type DocumentRecord } from '../documentsApi'
+import {
+  downloadDocument,
+  listDocuments,
+  uploadDocument,
+  type DocumentRecord,
+} from '../documentsApi'
 import './documents.css'
 
 const textExtensions = new Set(['txt', 'md', 'csv', 'json'])
@@ -25,6 +30,22 @@ type ListState =
   | { status: 'error' }
   | { status: 'ready'; documents: DocumentRecord[] }
 
+type DownloadState = { status: 'pending' } | { status: 'error'; message: string }
+
+function saveDownload(blob: Blob, filename: string) {
+  const link = document.createElement('a')
+  const url = URL.createObjectURL(blob)
+  try {
+    link.href = url
+    link.download = filename
+    document.body.append(link)
+    link.click()
+  } finally {
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+}
+
 export function DocumentsPage() {
   const { logout } = useAuth()
   const [state, setState] = useState<ListState>({ status: 'loading' })
@@ -33,8 +54,17 @@ export function DocumentsPage() {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [downloads, setDownloads] = useState<Record<string, DownloadState | undefined>>({})
+  const activeDownloads = useRef(new Set<string>())
+  const downloadLifetime = useRef<AbortController | null>(null)
   const uploadInProgress = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const lifetime = new AbortController()
+    downloadLifetime.current = lifetime
+    return () => lifetime.abort()
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -99,6 +129,37 @@ export function DocumentsPage() {
     }
   }
 
+  async function startDownload({ id, original_filename }: DocumentRecord) {
+    const lifetime = downloadLifetime.current
+    if (!lifetime || lifetime.signal.aborted || activeDownloads.current.has(id)) return
+
+    activeDownloads.current.add(id)
+    setDownloads((current) => ({ ...current, [id]: { status: 'pending' } }))
+    let next: DownloadState | undefined
+    try {
+      const blob = await downloadDocument(id)
+      if (!lifetime.signal.aborted) saveDownload(blob, original_filename)
+    } catch (error) {
+      if (lifetime.signal.aborted) return
+      const status = error instanceof ApiError ? error.status : undefined
+      if (status === 401) {
+        logout()
+      } else {
+        next = {
+          status: 'error',
+          message: status === 404
+            ? 'O documento está indisponível.'
+            : 'Não foi possível baixar o documento. Tente novamente.',
+        }
+      }
+    } finally {
+      activeDownloads.current.delete(id)
+      if (!lifetime.signal.aborted) {
+        setDownloads((current) => ({ ...current, [id]: next }))
+      }
+    }
+  }
+
   return (
     <AppShell>
       <section className="documents-page" aria-labelledby="documents-heading">
@@ -134,16 +195,31 @@ export function DocumentsPage() {
             <p role="status">Nenhum documento cadastrado.</p>
           ) : (
             <ul className="documents-list" aria-label="Arquivos cadastrados">
-              {state.documents.map((document) => (
-                <li key={document.id}>
-                  <span>{document.original_filename}</span>
-                  {canPreviewDocument(document.original_filename) && (
-                    <button type="button" onClick={() => setSelectedDocument(document)}>
-                      Abrir
-                    </button>
-                  )}
-                </li>
-              ))}
+              {state.documents.map((document) => {
+                const download = downloads[document.id]
+                return (
+                  <li key={document.id}>
+                    <div className="document-list-name">
+                      <span>{document.original_filename}</span>
+                      {download?.status === 'error' && <p role="alert">{download.message}</p>}
+                    </div>
+                    <div className="document-list-actions">
+                      {canPreviewDocument(document.original_filename) && (
+                        <button type="button" onClick={() => setSelectedDocument(document)}>
+                          Abrir
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={download?.status === 'pending'}
+                        onClick={() => void startDownload(document)}
+                      >
+                        {download?.status === 'pending' ? 'Baixando…' : 'Baixar'}
+                      </button>
+                    </div>
+                  </li>
+                )
+              })}
             </ul>
           )
         )}
