@@ -169,7 +169,6 @@ def test_delete_openapi_declares_not_found_and_uuid_validation() -> None:
     assert detail["properties"]["detail"] == {"type": "string"}
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["content", "download"])
 async def test_read_releases_database_session_before_streaming(
@@ -178,21 +177,13 @@ async def test_read_releases_database_session_before_streaming(
     user = User(id=uuid4(), email="employee@example.com", password_hash="hash")
     secret = "test-only-secret-for-document-streaming"
     monkeypatch.setenv("JWT_SECRET_KEY", secret)
-    token = AuthService(
-        Mock(spec=UserService), secret_key=secret
-    ).create_access_token(user.id)
-
-    session = AsyncMock(spec=AsyncSession)
-
-    async def get_record(model: type, record_id):
-        if model is User:
-            return user
-        if model is Document:
-            return document
-        return None
-
-    session.get.side_effect = get_record
-
+    token = AuthService(Mock(spec=UserService), secret_key=secret).create_access_token(user.id)
+    session = Mock(spec=AsyncSession)
+    session.get.return_value = document
+    auth_session = AsyncMock(spec=AsyncSession)
+    auth_session.__aenter__.return_value = auth_session
+    auth_session.get.return_value = user
+    monkeypatch.setattr(database, "get_session_maker", lambda: lambda: auth_session)
     lifecycle: list[str] = []
 
     async def document_database() -> AsyncIterator[AsyncSession]:
@@ -205,39 +196,29 @@ async def test_read_releases_database_session_before_streaming(
     reader = BytesIO(CONTENT)
 
     def open_reader(key: str) -> BytesIO:
+        auth_session.__aexit__.assert_awaited_once()
         assert lifecycle == ["open", "close"]
         return reader
 
     storage = Mock(spec=DocumentStorage)
     storage.open.side_effect = open_reader
-
     app = app_module.app
-    monkeypatch.setitem(
-        app_module.fastapi_app.dependency_overrides,
-        get_db,
-        document_database,
-    )
-    monkeypatch.setitem(
-        app_module.fastapi_app.dependency_overrides,
-        get_document_storage,
-        lambda: storage,
-    )
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_db, document_database)
+    monkeypatch.setitem(app_module.fastapi_app.dependency_overrides, get_document_storage, lambda: storage)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get(
-            f"/documents/{document.id}/{action}",
-            headers={"Authorization": f"Bearer {token}"},
+            f"/documents/{document.id}/{action}", headers={"Authorization": f"Bearer {token}"}
         )
 
     assert response.status_code == 200
     assert response.content == CONTENT
     assert reader.closed
-    assert lifecycle == ["open", "close"]
     storage.open.assert_called_once_with(document.storage_key)
-    session.get.assert_any_await(User, user.id)
-    session.get.assert_any_await(Document, document.id)
+    auth_session.get.assert_awaited_once_with(User, user.id)
+    session.get.assert_awaited_once_with(Document, document.id)
 
 
 @pytest.mark.asyncio

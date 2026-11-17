@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.document import Document
 from api.repositories.document import DocumentRepository
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def test_create_preserves_document_fields(db_session: AsyncSession) -> None:

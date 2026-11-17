@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import Document
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def test_document_persists_with_generated_uuid(db_session: AsyncSession) -> None:

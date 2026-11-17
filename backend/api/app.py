@@ -16,6 +16,8 @@ app = CORSMiddleware(
     allow_origins=get_cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Content-Disposition"],
     expose_headers=["Content-Disposition"],
 )

@@ -67,3 +67,24 @@ def get_document_storage_bucket() -> str:
     if not bucket:
         raise RuntimeError("DOCUMENT_STORAGE_BUCKET must be set.")
     return bucket
+
+
+def get_document_storage_backend() -> Literal["local", "gcs"]:
+    backend = os.getenv("DOCUMENT_STORAGE_BACKEND", "local").strip()
+    if backend == "local" or backend == "gcs":
+        return backend
+    raise RuntimeError("DOCUMENT_STORAGE_BACKEND must be 'local' or 'gcs'.")
+
+
+def get_document_storage_dir() -> Path:
+    directory = os.getenv("DOCUMENT_STORAGE_DIR", "").strip()
+    if not directory:
+        raise RuntimeError("DOCUMENT_STORAGE_DIR must be set.")
+    return Path(directory)
+
+
+def get_document_storage_bucket() -> str:
+    bucket = os.getenv("DOCUMENT_STORAGE_BUCKET", "").strip()
+    if not bucket:
+        raise RuntimeError("DOCUMENT_STORAGE_BUCKET must be set.")
+    return bucket

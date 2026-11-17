@@ -315,7 +315,7 @@ O assistente, quando o remetente pedir documentos, dados pessoais ou dados banc�
 
 ### RF38 - Gerenciar documentos
 
-O funcionário deve poder ler, adicionar, baixar e excluir documentos na aplicação.
+O funcionário deve poder listar, adicionar, abrir para leitura, baixar e excluir documentos na aplicação.
 
 regras de negócio:
 
