@@ -11,12 +11,12 @@ from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+pytestmark = pytest.mark.asyncio(loop_scope="function")
 
 TEST_SECRET_KEY = "test-secret-key-with-at-least-32-bytes-long"
 
 
-@pytest_asyncio.fixture(loop_scope="session")
+@pytest_asyncio.fixture(loop_scope="function")
 async def client(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

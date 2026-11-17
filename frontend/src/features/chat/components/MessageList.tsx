@@ -1,8 +1,5 @@
-interface ChatMessage {
-  id: string
-  author: 'assistant' | 'user'
-  text: string
-}
+
+import type { ChatMessage } from '../types'
 
 interface MessageListProps {
   messages: ChatMessage[]
@@ -16,14 +13,22 @@ export function MessageList({ messages }: MessageListProps) {
       aria-label="Histórico da conversa"
       aria-live="polite"
     >
-      {messages.map((message) => (
-        <article className={`chat-message ${message.author}`} key={message.id}>
-          <span className="message-author">
-            {message.author === 'assistant' ? 'Assistente' : 'Você'}
-          </span>
-          <p>{message.text}</p>
-        </article>
-      ))}
+      {messages.map((message) => {
+        const isAssistant = message.role === 'assistant'
+
+        return (
+          <article
+            className={`chat-message ${isAssistant ? 'assistant' : 'user'}`}
+            key={message.id}
+          >
+            <span className="message-author">
+              {isAssistant ? 'Assistente' : 'Você'}
+            </span>
+
+            <p>{message.content}</p>
+          </article>
+        )
+      })}
     </div>
   )
 }
