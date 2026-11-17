@@ -1,4 +1,5 @@
 
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -85,17 +86,28 @@ def test_get_document_service_injects_session_and_storage() -> None:
 @pytest.fixture
 def auth_session(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[AsyncMock, Mock]:
+) -> Iterator[tuple[AsyncMock, Mock]]:
     session = AsyncMock(spec=AsyncSession)
+    session.__aenter__.return_value = session
     auth_service = Mock(spec=AuthService)
+    session_maker = Mock(return_value=session)
+    get_session_maker = Mock(return_value=session_maker)
+    build_auth_service = Mock(return_value=auth_service)
+
+    monkeypatch.setattr(dependencies.database, "get_session_maker", get_session_maker)
 
     monkeypatch.setattr(
         dependencies,
         "_build_auth_service",
-        Mock(return_value=auth_service),
+        build_auth_service,
     )
 
-    return session, auth_service
+    yield session, auth_service
+
+    get_session_maker.assert_called_once_with()
+    session_maker.assert_called_once_with()
+    session.__aenter__.assert_awaited_once_with()
+    build_auth_service.assert_called_once_with(session)
 
 
 @pytest.mark.asyncio
@@ -108,21 +120,16 @@ async def test_get_current_user_returns_authenticated_user(
         password_hash="hash",
     )
     session, auth_service = auth_session
-    session, auth_service = auth_session
     auth_service.get_current_user = AsyncMock(return_value=user)
 
-    result = await get_current_user("valid-token", session)
+    result = await get_current_user("valid-token")
 
+    session.__aexit__.assert_awaited_once_with(None, None, None)
     assert result is user
     auth_service.get_current_user.assert_awaited_once_with("valid-token")
-    session.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_get_current_user_rejects_invalid_token(
-    auth_session: tuple[AsyncMock, Mock],
-) -> None:
-    session, auth_service = auth_session
 async def test_get_current_user_rejects_invalid_token(
     auth_session: tuple[AsyncMock, Mock],
 ) -> None:
@@ -132,9 +139,10 @@ async def test_get_current_user_rejects_invalid_token(
     )
 
     with pytest.raises(HTTPException) as exception:
-        await get_current_user("invalid-token", session)
+        await get_current_user("invalid-token")
 
     session.__aexit__.assert_awaited_once()
+    assert session.__aexit__.await_args.args[0] is InvalidAccessTokenError
     assert exception.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert exception.value.detail == "Could not validate credentials."
     assert exception.value.headers == {"WWW-Authenticate": "Bearer"}
@@ -145,16 +153,12 @@ async def test_get_current_user_rejects_missing_user(
     auth_session: tuple[AsyncMock, Mock],
 ) -> None:
     session, auth_service = auth_session
-async def test_get_current_user_rejects_missing_user(
-    auth_session: tuple[AsyncMock, Mock],
-) -> None:
-    session, auth_service = auth_session
     auth_service.get_current_user = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as exception:
-        await get_current_user("valid-token", session)
+        await get_current_user("valid-token")
 
-    session.__aexit__.assert_awaited_once()
+    session.__aexit__.assert_awaited_once_with(None, None, None)
     assert exception.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert exception.value.detail == "Could not validate credentials."
     assert exception.value.headers == {"WWW-Authenticate": "Bearer"}

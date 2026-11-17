@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
 from ..repositories.chat import ChatRepository
 
@@ -21,7 +22,7 @@ class ChatService:
 
     async def get_session_with_messages(
             self, session_id: UUID, user_id: UUID
-    ) -> tuple[ChatSession, list[ChatSession]]: 
+    ) -> tuple[ChatSession, list[ChatMessage]]:
         chat = await self.repository.get_session(session_id, user_id)
         if chat is None:
             raise SessionNotFoundError
@@ -30,7 +31,7 @@ class ChatService:
     
     async def add_message(
             self, session_id: UUID, user_id: UUID, content: str
-    ) -> ChatRepository:
+    ) -> ChatMessage:
         chat = await self.repository.get_session(session_id, user_id)
         if chat is None:
             raise SessionNotFoundError

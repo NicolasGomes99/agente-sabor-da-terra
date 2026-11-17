@@ -1,100 +1,233 @@
-
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AppShell } from '../../../components/layout/AppShell'
+import { ApiError } from '../../../lib/api-client'
+import { useAuth } from '../../auth/useAuth'
 import { ChatHeader } from '../components/ChatHeader'
 import { ChatHistory } from '../components/ChatHistory'
 import { ChatInput } from '../components/ChatInput'
 import { MessageList } from '../components/MessageList'
-
 import {
   createChatSession,
   getChatSession,
   listChatSessions,
   sendChatMessage,
 } from '../chatApi'
-
 import type { ChatMessage, ChatSession } from '../types'
 
 import './chat.css'
 
+type ConversationState = {
+  messages: ChatMessage[]
+  loading: boolean
+  sending: boolean
+  loadError: string | null
+  sendError: string | null
+}
+
+const emptyConversation: ConversationState = {
+  messages: [],
+  loading: false,
+  sending: false,
+  loadError: null,
+  sendError: null,
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()]
+}
+
+function sortMessages(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((left, right) =>
+    left.position - right.position ||
+    left.created_at.localeCompare(right.created_at) ||
+    left.id.localeCompare(right.id)
+  )
+}
+
 export function ChatPage() {
+  const { logout } = useAuth()
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<
+    Record<string, ConversationState | undefined>
+  >({})
+  const [listing, setListing] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [listError, setListError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const pageLifetime = useRef<AbortController | null>(null)
+  const messageRead = useRef<AbortController | null>(null)
+  const selectionRevision = useRef(0)
+  const createInProgress = useRef(false)
+  const pendingSends = useRef(new Set<string>())
+  const confirmedMessages = useRef(new Map<string, ChatMessage[]>())
 
-  const selectSession = useCallback(async (sessionId: string) => {
-    setActiveSessionId(sessionId)
-    setMessages([])
-    setError(null)
-    setLoading(true)
-
-    try {
-      const session = await getChatSession(sessionId)
-      setMessages(session.messages)
-    } catch {
-      setError('Não foi possível carregar as mensagens.')
-    } finally {
-      setLoading(false)
-    }
+  const updateConversation = useCallback((
+    sessionId: string, patch: Partial<ConversationState>,
+  ) => {
+    setConversations((current) => ({
+      ...current,
+      [sessionId]: { ...(current[sessionId] ?? emptyConversation), ...patch },
+    }))
   }, [])
 
+  const expireSession = useCallback((error: unknown, lifetime: AbortController) => {
+    if (error instanceof ApiError && error.status === 401) {
+      lifetime.abort()
+      messageRead.current?.abort()
+      logout()
+      return true
+    }
+    return false
+  }, [logout])
+
+  const selectSession = useCallback(async (sessionId: string) => {
+    const lifetime = pageLifetime.current
+    if (!lifetime || lifetime.signal.aborted) return
+
+    selectionRevision.current += 1
+    messageRead.current?.abort()
+    const controller = new AbortController()
+    messageRead.current = controller
+    setActiveSessionId(sessionId)
+    setListError(null)
+    setCreateError(null)
+    updateConversation(sessionId, { loading: true, loadError: null })
+
+    const isCurrentRead = () =>
+      !lifetime.signal.aborted && !controller.signal.aborted &&
+      messageRead.current === controller
+
+    try {
+      const session = await getChatSession(sessionId, controller.signal)
+      if (!isCurrentRead()) return
+
+      // A read may have started before an in-flight send was committed.
+      updateConversation(sessionId, {
+        messages: sortMessages(uniqueById([
+          ...session.messages,
+          ...(confirmedMessages.current.get(sessionId) ?? []),
+        ])),
+      })
+    } catch (error) {
+      if (!isCurrentRead() || expireSession(error, lifetime)) return
+      updateConversation(sessionId, {
+        loadError: 'Não foi possível carregar as mensagens.',
+      })
+    } finally {
+      if (isCurrentRead()) {
+        messageRead.current = null
+        updateConversation(sessionId, { loading: false })
+      }
+    }
+  }, [expireSession, updateConversation])
+
   useEffect(() => {
+    const lifetime = new AbortController()
+    pageLifetime.current = lifetime
+    const initialRevision = selectionRevision.current
+
     async function loadSessions() {
       try {
-        const data = await listChatSessions()
-        setSessions(data)
+        const data = await listChatSessions(lifetime.signal)
+        if (lifetime.signal.aborted) return
+        setSessions((current) => uniqueById([...current, ...data]))
 
-        if (data.length > 0) {
-          await selectSession(data[0].id)
+        if (selectionRevision.current === initialRevision && data.length > 0) {
+          void selectSession(data[0].id)
         }
-      } catch {
-        setError('Não foi possível carregar as conversas.')
+      } catch (error) {
+        if (lifetime.signal.aborted || expireSession(error, lifetime)) return
+        if (selectionRevision.current === initialRevision) {
+          setListError('Não foi possível carregar as conversas.')
+        }
       } finally {
-        setLoading(false)
+        if (!lifetime.signal.aborted) setListing(false)
       }
     }
 
     void loadSessions()
-  }, [selectSession])
+    return () => {
+      lifetime.abort()
+      messageRead.current?.abort()
+    }
+  }, [expireSession, selectSession])
 
   async function handleCreateSession() {
-    setError(null)
-    setLoading(true)
+    const lifetime = pageLifetime.current
+    if (!lifetime || lifetime.signal.aborted || createInProgress.current) return
+
+    createInProgress.current = true
+    const revision = ++selectionRevision.current
+    setCreating(true)
+    setListError(null)
+    setCreateError(null)
 
     try {
       const session = await createChatSession()
+      if (lifetime.signal.aborted) return
+      setSessions((current) => uniqueById([session, ...current]))
 
-      setSessions((current) => [session, ...current])
-      setActiveSessionId(session.id)
-      setMessages([])
-    } catch {
-      setError('Não foi possível criar uma nova conversa.')
+      if (selectionRevision.current === revision) {
+        messageRead.current?.abort()
+        messageRead.current = null
+        updateConversation(session.id, emptyConversation)
+        setActiveSessionId(session.id)
+      }
+    } catch (error) {
+      if (lifetime.signal.aborted || expireSession(error, lifetime)) return
+      if (selectionRevision.current === revision) {
+        setCreateError('Não foi possível criar uma nova conversa.')
+      }
     } finally {
-      setLoading(false)
+      createInProgress.current = false
+      if (!lifetime.signal.aborted) setCreating(false)
     }
   }
 
   async function handleSendMessage(content: string) {
-    if (!activeSessionId) return
+    const lifetime = pageLifetime.current
+    const sessionId = activeSessionId
+    if (!lifetime || lifetime.signal.aborted || !sessionId ||
+      pendingSends.current.has(sessionId)) return
 
-    setSending(true)
-    setError(null)
+    pendingSends.current.add(sessionId)
+    updateConversation(sessionId, { sending: true, sendError: null })
 
     try {
-      const message = await sendChatMessage(activeSessionId, { content })
+      const message = await sendChatMessage(sessionId, { content })
+      if (lifetime.signal.aborted) return
 
-      setMessages((current) => [...current, message])
-    } catch {
-      setError('Não foi possível enviar a mensagem.')
-      throw new Error('Message sending failed')
+      confirmedMessages.current.set(sessionId, uniqueById([
+        ...(confirmedMessages.current.get(sessionId) ?? []), message,
+      ]))
+      setConversations((current) => {
+        const conversation = current[sessionId] ?? emptyConversation
+        return {
+          ...current,
+          [sessionId]: {
+            ...conversation,
+            messages: sortMessages(uniqueById([...conversation.messages, message])),
+          },
+        }
+      })
+    } catch (error) {
+      if (!lifetime.signal.aborted && !expireSession(error, lifetime)) {
+        updateConversation(sessionId, {
+          sendError: 'Não foi possível enviar a mensagem.',
+        })
+      }
+      throw error
     } finally {
-      setSending(false)
+      pendingSends.current.delete(sessionId)
+      if (!lifetime.signal.aborted) updateConversation(sessionId, { sending: false })
     }
   }
+
+  const conversation = (activeSessionId && conversations[activeSessionId]) || emptyConversation
+  const loading = conversation.loading || (!activeSessionId && (listing || creating))
+  const errors = [listError, createError, conversation.loadError, conversation.sendError]
 
   return (
     <AppShell>
@@ -102,6 +235,7 @@ export function ChatPage() {
         <ChatHistory
           conversations={sessions}
           activeSessionId={activeSessionId}
+          creating={creating}
           onSelect={selectSession}
           onCreate={handleCreateSession}
         />
@@ -115,17 +249,18 @@ export function ChatPage() {
             subtitle="Consulte informações da operação da cooperativa."
           />
 
-          {error && <p role="alert">{error}</p>}
+          {errors.map((error) => error && <p key={error} role="alert">{error}</p>)}
 
           {loading ? (
             <p>Carregando conversa...</p>
           ) : (
-            <MessageList messages={messages} />
+            <MessageList messages={conversation.messages} />
           )}
 
           <ChatInput
+            key={activeSessionId ?? 'no-session'}
             onSend={handleSendMessage}
-            disabled={!activeSessionId || loading || sending}
+            disabled={!activeSessionId || loading || conversation.sending}
           />
         </section>
       </div>
