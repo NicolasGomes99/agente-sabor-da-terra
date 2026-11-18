@@ -8,8 +8,8 @@ import type {
   CreateMessagePayload,
 } from './types'
 
-export function listChatSessions(): Promise<ChatSession[]> {
-  return apiRequest<ChatSession[]>('/chat/sessions')
+export function listChatSessions(signal?: AbortSignal): Promise<ChatSession[]> {
+  return apiRequest<ChatSession[]>('/chat/sessions', { signal })
 }
 
 export function createChatSession(): Promise<ChatSession> {
@@ -20,9 +20,11 @@ export function createChatSession(): Promise<ChatSession> {
 
 export function getChatSession(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<ChatSessionDetail> {
   return apiRequest<ChatSessionDetail>(
     `/chat/sessions/${sessionId}`,
+    { signal },
   )
 }
 

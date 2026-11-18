@@ -145,6 +145,12 @@
   .sidebar-nav-item {
     justify-content: center;
     padding-inline: 0;
+    font-size: 0;
+  }
+
+  .new-chat-button span,
+  .sidebar-nav-item span {
+    font-size: 1rem;
   }
 
   .logout-button {
@@ -156,5 +162,15 @@
   .logout-button::before {
     content: '↪';
     font-size: 1rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    display: none;
   }
 }
