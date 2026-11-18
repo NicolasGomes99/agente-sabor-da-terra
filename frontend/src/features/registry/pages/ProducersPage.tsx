@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 
 import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
@@ -26,6 +26,7 @@ function normalizeSearch(value: string): string {
 
 export function ProducersPage() {
   const { logout } = useAuth()
+  const { search: listQuery } = useLocation()
   const [params, setParams] = useSearchParams()
   const search = params.get('q') ?? ''
   const productId = params.get('product_id') ?? ''
@@ -185,7 +186,14 @@ export function ProducersPage() {
           <ul className="producers-list">
             {visibleProducers.map(({ id, name, code, municipality, active }) => (
               <li key={id}>
-                <strong>{name}</strong>
+                <strong>
+                  <Link to={{
+                    pathname: `/registry/producers/${encodeURIComponent(id)}`,
+                    search: listQuery,
+                  }}>
+                    {name}
+                  </Link>
+                </strong>
                 <dl>
                   <div><dt>Código</dt><dd>{code}</dd></div>
                   <div><dt>Município</dt><dd>{municipality?.trim() || 'Não informado'}</dd></div>

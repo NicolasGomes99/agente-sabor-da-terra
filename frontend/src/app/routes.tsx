@@ -4,6 +4,7 @@ import { LoginPage } from '../features/auth/pages/LoginPage'
 import { useAuth } from '../features/auth/useAuth'
 import { ChatPage } from '../features/chat/pages/ChatPage'
 import { DocumentsPage } from '../features/documents/pages/DocumentsPage'
+import { ProducerDetailPage } from '../features/registry/pages/ProducerDetailPage'
 import { ProducersPage } from '../features/registry/pages/ProducersPage'
 import { ProductsPage } from '../features/registry/pages/ProductsPage'
 
@@ -37,6 +38,7 @@ export function AppRoutes() {
         <Route path="/registry" element={<Navigate to="/registry/products" replace />} />
         <Route path="/registry/products" element={<ProductsPage />} />
         <Route path="/registry/producers" element={<ProducersPage />} />
+        <Route path="/registry/producers/:producerId" element={<ProducerDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>
