@@ -115,8 +115,13 @@ async def get_current_user(
     return user
 
 def get_order_service(
-    session: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[
+        AsyncSession,
+        Depends(get_db, scope="function"),
+    ],
 ) -> OrderService:
-    repository = OrderRepository(session)
-    return OrderService(repository)
+    return OrderService(
+        repository=OrderRepository(session),
+        product_repository=ProductRepository(session),
+    )
 

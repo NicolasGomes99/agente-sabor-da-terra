@@ -95,7 +95,10 @@ class OrderUpdate(OrderBase):
 
 
 class OrderResponse(OrderBase):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+    from_attributes=True,
+    str_strip_whitespace=False,
+)
 
     id: UUID
     session_id: UUID | None
