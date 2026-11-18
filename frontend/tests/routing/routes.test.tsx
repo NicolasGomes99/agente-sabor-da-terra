@@ -11,11 +11,14 @@ import {
   sendChatMessage,
 } from '../../src/features/chat/chatApi'
 import { listDocuments } from '../../src/features/documents/documentsApi'
+import { listProducts } from '../../src/features/registry/registryApi'
 import { ApiError } from '../../src/lib/api-client'
 import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
 vi.mock('../../src/features/documents/documentsApi', () => ({ listDocuments: vi.fn() }))
 const list = vi.mocked(listDocuments)
+vi.mock('../../src/features/registry/registryApi', () => ({ listProducts: vi.fn() }))
+const productList = vi.mocked(listProducts)
 vi.mock('../../src/features/chat/chatApi', () => ({
   createChatSession: vi.fn(),
   getChatSession: vi.fn(),
@@ -42,6 +45,7 @@ describe('AppRoutes', () => {
   beforeEach(() => {
     localStorage.clear()
     list.mockReset()
+    productList.mockReset()
     chatList.mockReset().mockResolvedValue([])
     chatRead.mockReset().mockResolvedValue({ ...session, messages: [] })
     chatCreate.mockReset().mockResolvedValue(session)
@@ -85,6 +89,27 @@ describe('AppRoutes', () => {
     list.mockRejectedValue(new ApiError(401, { detail: 'Unauthorized' }))
     renderRoutes('/documents')
 
+    expect(await screen.findByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+    expect(getAccessToken()).toBeNull()
+  })
+
+  it('redirects unauthenticated users from products to login', () => {
+    renderRoutes('/registry/products')
+
+    expect(screen.getByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+    expect(productList).not.toHaveBeenCalled()
+  })
+
+  it('opens products from Cadastros and returns to login on 401', async () => {
+    setAccessToken('expired-token')
+    list.mockResolvedValue([])
+    productList.mockRejectedValueOnce(new ApiError(401, { detail: 'Unauthorized' }))
+    renderRoutes('/documents')
+    await screen.findByText('Nenhum documento cadastrado.')
+
+    fireEvent.click(screen.getByRole('link', { name: 'Cadastros' }))
+
+    expect(screen.getByRole('heading', { name: 'Produtos' })).toBeTruthy()
     expect(await screen.findByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
     expect(getAccessToken()).toBeNull()
   })
