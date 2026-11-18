@@ -11,14 +11,18 @@ import {
   sendChatMessage,
 } from '../../src/features/chat/chatApi'
 import { listDocuments } from '../../src/features/documents/documentsApi'
-import { listProducts } from '../../src/features/registry/registryApi'
+import { listProducers, listProducts } from '../../src/features/registry/registryApi'
 import { ApiError } from '../../src/lib/api-client'
 import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
 vi.mock('../../src/features/documents/documentsApi', () => ({ listDocuments: vi.fn() }))
 const list = vi.mocked(listDocuments)
-vi.mock('../../src/features/registry/registryApi', () => ({ listProducts: vi.fn() }))
+vi.mock('../../src/features/registry/registryApi', () => ({
+  listProducers: vi.fn(),
+  listProducts: vi.fn(),
+}))
 const productList = vi.mocked(listProducts)
+const producerList = vi.mocked(listProducers)
 vi.mock('../../src/features/chat/chatApi', () => ({
   createChatSession: vi.fn(),
   getChatSession: vi.fn(),
@@ -45,7 +49,8 @@ describe('AppRoutes', () => {
   beforeEach(() => {
     localStorage.clear()
     list.mockReset()
-    productList.mockReset()
+    productList.mockReset().mockResolvedValue([])
+    producerList.mockReset().mockResolvedValue([])
     chatList.mockReset().mockResolvedValue([])
     chatRead.mockReset().mockResolvedValue({ ...session, messages: [] })
     chatCreate.mockReset().mockResolvedValue(session)
@@ -113,6 +118,51 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
     expect(getAccessToken()).toBeNull()
   })
+
+  it('redirects unauthenticated users from producers to login', () => {
+    renderRoutes('/registry/producers')
+
+    expect(screen.getByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+    expect(productList).not.toHaveBeenCalled()
+    expect(producerList).not.toHaveBeenCalled()
+  })
+
+  it('switches between Products and Producers from Cadastros', async () => {
+    setAccessToken('access-token')
+    list.mockResolvedValue([])
+    renderRoutes('/documents')
+    await screen.findByText('Nenhum documento cadastrado.')
+
+    fireEvent.click(screen.getByRole('link', { name: 'Cadastros' }))
+    await screen.findByText('Nenhum produto cadastrado.')
+    expect(screen.getByRole('link', { name: 'Produtos' }).getAttribute('aria-current')).toBe('page')
+
+    fireEvent.click(screen.getByRole('link', { name: 'Produtores' }))
+    await screen.findByText('Nenhum produtor cadastrado.')
+    expect(screen.getByRole('link', { name: 'Cadastros' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Produtores' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Produtos' }).hasAttribute('aria-current')).toBe(false)
+
+    fireEvent.click(screen.getByRole('link', { name: 'Produtos' }))
+    await screen.findByText('Nenhum produto cadastrado.')
+    expect(screen.getByRole('link', { name: 'Cadastros' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Produtos' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it.each(['catalog', 'listing'])(
+    'returns to login when a producer page request rejects the token ($0)',
+    async (request) => {
+      setAccessToken('expired-token')
+      const error = new ApiError(401, { detail: 'Unauthorized' })
+      if (request === 'catalog') productList.mockRejectedValueOnce(error)
+      else producerList.mockRejectedValueOnce(error)
+
+      renderRoutes('/registry/producers')
+
+      expect(await screen.findByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+      expect(getAccessToken()).toBeNull()
+    },
+  )
 
   it.each(['list', 'read', 'create', 'send'])(
     'returns to login when chat %s rejects the token', async (operation) => {
