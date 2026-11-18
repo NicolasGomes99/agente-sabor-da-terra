@@ -4,6 +4,7 @@ import { LoginPage } from '../features/auth/pages/LoginPage'
 import { useAuth } from '../features/auth/useAuth'
 import { ChatPage } from '../features/chat/pages/ChatPage'
 import { DocumentsPage } from '../features/documents/pages/DocumentsPage'
+import { ProductsPage } from '../features/registry/pages/ProductsPage'
 
 function PublicRoute() {
   const { isAuthenticated } = useAuth()
@@ -32,6 +33,7 @@ export function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/registry/products" element={<ProductsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>
