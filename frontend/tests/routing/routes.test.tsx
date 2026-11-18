@@ -11,18 +11,20 @@ import {
   sendChatMessage,
 } from '../../src/features/chat/chatApi'
 import { listDocuments } from '../../src/features/documents/documentsApi'
-import { listProducers, listProducts } from '../../src/features/registry/registryApi'
+import { getProducer, listProducers, listProducts } from '../../src/features/registry/registryApi'
 import { ApiError } from '../../src/lib/api-client'
 import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
 vi.mock('../../src/features/documents/documentsApi', () => ({ listDocuments: vi.fn() }))
 const list = vi.mocked(listDocuments)
 vi.mock('../../src/features/registry/registryApi', () => ({
+  getProducer: vi.fn(),
   listProducers: vi.fn(),
   listProducts: vi.fn(),
 }))
 const productList = vi.mocked(listProducts)
 const producerList = vi.mocked(listProducers)
+const producerRead = vi.mocked(getProducer)
 vi.mock('../../src/features/chat/chatApi', () => ({
   createChatSession: vi.fn(),
   getChatSession: vi.fn(),
@@ -51,6 +53,7 @@ describe('AppRoutes', () => {
     list.mockReset()
     productList.mockReset().mockResolvedValue([])
     producerList.mockReset().mockResolvedValue([])
+    producerRead.mockReset()
     chatList.mockReset().mockResolvedValue([])
     chatRead.mockReset().mockResolvedValue({ ...session, messages: [] })
     chatCreate.mockReset().mockResolvedValue(session)
@@ -163,6 +166,52 @@ describe('AppRoutes', () => {
       expect(getAccessToken()).toBeNull()
     },
   )
+
+  it('redirects unauthenticated users from producer detail to login', () => {
+    renderRoutes('/registry/producers/ana')
+
+    expect(screen.getByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+    expect(producerRead).not.toHaveBeenCalled()
+  })
+
+  it('opens producer detail and restores the list search and product filter', async () => {
+    setAccessToken('access-token')
+    const lettuce = { id: 'lettuce', name: 'Alface' }
+    const ana = {
+      id: 'ana', name: 'Ana Silva', code: 'P001', cpf: '01234567890', active: true,
+      municipality: 'Caruaru', address: null, phone: null, email: null, products: [lettuce],
+    }
+    productList.mockResolvedValue([lettuce])
+    producerList.mockResolvedValue([ana])
+    producerRead.mockResolvedValueOnce(ana)
+    renderRoutes('/registry/producers')
+    await screen.findByRole('link', { name: ana.name })
+    await screen.findByRole('option', { name: lettuce.name })
+
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'P001' } })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: lettuce.id } })
+    fireEvent.click(await screen.findByRole('link', { name: ana.name }))
+
+    expect(await screen.findByRole('heading', { name: ana.name })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Produtores' }).getAttribute('aria-current')).toBe('page')
+    expect(producerRead).toHaveBeenCalledExactlyOnceWith(ana.id, expect.any(AbortSignal))
+
+    fireEvent.click(screen.getByRole('link', { name: 'Voltar para produtores' }))
+    expect(await screen.findByRole('link', { name: ana.name })).toBeTruthy()
+    await screen.findByRole('option', { name: lettuce.name })
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('P001')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(lettuce.id)
+    expect(producerList).toHaveBeenLastCalledWith(lettuce.id, expect.any(AbortSignal))
+  })
+
+  it('returns to login when the producer detail API rejects the token', async () => {
+    setAccessToken('expired-token')
+    producerRead.mockRejectedValueOnce(new ApiError(401, { detail: 'Unauthorized' }))
+    renderRoutes('/registry/producers/ana')
+
+    expect(await screen.findByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
+    expect(getAccessToken()).toBeNull()
+  })
 
   it.each(['list', 'read', 'create', 'send'])(
     'returns to login when chat %s rejects the token', async (operation) => {
