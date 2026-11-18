@@ -3,6 +3,7 @@ from .base import Base
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .document import Document
+from .product import Product
 from .user import User
 
 __all__ = [
@@ -10,5 +11,6 @@ __all__ = [
     "ChatMessage",
     "ChatSession",
     "Document",
+    "Product",
     "User",
 ]
