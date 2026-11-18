@@ -1,4 +1,5 @@
 from datetime import date
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -10,10 +11,12 @@ from sqlalchemy import (
     Uuid,
     false,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
+if TYPE_CHECKING:
+    from .order_item import OrderItem
 
 class Order(Base):
     __tablename__ = "orders"
@@ -69,4 +72,10 @@ class Order(Base):
         nullable=False,
         default=False,
         server_default=false(),
+    )
+
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="OrderItem.id",
     )
