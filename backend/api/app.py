@@ -3,13 +3,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_cors_allowed_origins
-from .routers import auth, chat, document
+from .routers import auth, chat, document, product
 
 fastapi_app = FastAPI(title="Sabor da Terra API")
 
 fastapi_app.include_router(auth.router)
 fastapi_app.include_router(chat.router)
 fastapi_app.include_router(document.router)
+fastapi_app.include_router(product.router)
 
 app = CORSMiddleware(
     fastapi_app,

@@ -17,10 +17,12 @@ from .database import get_db
 from .models.user import User
 from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
+from .repositories.product import ProductRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
 from .services.document import DocumentService
+from .services.product import ProductService
 from .services.user import UserService
 from .storage.base import DocumentStorage
 from .storage.gcs import GCSDocumentStorage
@@ -70,6 +72,12 @@ def get_chat_service(
     session: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> ChatService:
     return ChatService(ChatRepository(session))
+
+
+def get_product_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> ProductService:
+    return ProductService(ProductRepository(session))
 
 
 async def get_current_user(
