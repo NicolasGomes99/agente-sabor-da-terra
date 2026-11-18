@@ -17,12 +17,14 @@ from .database import get_db
 from .models.user import User
 from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
+from .repositories.order import OrderRepository
 from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
 from .services.document import DocumentService
+from .services.order import OrderService
 from .services.producer import ProducerService
 from .services.product import ProductService
 from .services.user import UserService
@@ -92,6 +94,7 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
     session_maker = database.get_session_maker()
+    
     try:
         async with session_maker() as session:
             user = await _build_auth_service(session).get_current_user(token)
@@ -110,4 +113,10 @@ async def get_current_user(
         )
 
     return user
+
+def get_order_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> OrderService:
+    repository = OrderRepository(session)
+    return OrderService(repository)
 
