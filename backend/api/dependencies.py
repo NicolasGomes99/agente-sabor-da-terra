@@ -16,10 +16,12 @@ from .database import get_db
 from .models.user import User
 from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
+from .repositories.order import OrderRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
 from .services.document import DocumentService
+from .services.order import OrderService
 from .services.user import UserService
 from .storage.base import DocumentStorage
 from .storage.gcs import GCSDocumentStorage
@@ -93,4 +95,10 @@ async def get_current_user(
         )
 
     return user
+
+def get_order_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> OrderService:
+    repository = OrderRepository(session)
+    return OrderService(repository)
 
