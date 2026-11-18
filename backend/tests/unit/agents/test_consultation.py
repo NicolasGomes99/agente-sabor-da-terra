@@ -384,3 +384,10 @@ async def test_consultation_handles_empty_sources_without_inventing() -> None:
     assert result.source_ids == []
     assert result.cited_sources == []
     assert any(g.kind == "lacuna" for g in result.gaps_and_divergences)
+
+
+def test_consultation_schema_is_compatible_with_google_genai_transformer() -> None:
+    from google.genai._transformers import t_schema
+
+    schema = t_schema(None, ConsultationResponse)
+    assert schema is not None

@@ -164,9 +164,8 @@ class TriageExtractedItem(BaseModel):
     )
     quantity: float | None = Field(
         default=None,
-        gt=0,
         description=(
-            "Quantidade numérica individual do item, quando definida sem "
+            "Quantidade numérica individual do item (> 0), quando definida sem "
             "agregação com outros produtos."
         ),
     )
@@ -197,6 +196,13 @@ class TriageExtractedItem(BaseModel):
         default=None,
         description="Informação específica que falta confirmar sobre este item.",
     )
+
+    @field_validator("quantity")
+    @classmethod
+    def _validate_positive_quantity(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("quantity must be greater than zero.")
+        return value
 
 
 class TriageRequirement(BaseModel):

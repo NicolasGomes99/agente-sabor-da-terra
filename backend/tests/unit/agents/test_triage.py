@@ -112,8 +112,8 @@ def test_get_agent_model_uses_default_when_unset(
 def test_get_agent_model_reads_configured_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("GEMINI_AGENT_MODEL", " gemini-3.8-flash ")
-    assert get_agent_model() == "gemini-3.8-flash"
+    monkeypatch.setenv("GEMINI_AGENT_MODEL", " gemini-3.8-pro ")
+    assert get_agent_model() == "gemini-3.8-pro"
 
 
 def test_get_agent_model_rejects_blank_value(
@@ -730,3 +730,15 @@ async def test_analyze_ped_2026_015_preserves_offer_and_additional_registration_
     assert result.urgency == UrgencyLevel.URGENT
     assert len(result.additional_intents) == 2
     assert any("cadastro" in intent.lower() for intent in result.additional_intents)
+
+
+def test_triage_schema_is_compatible_with_google_genai_transformer() -> None:
+    from google.genai._transformers import t_schema
+
+    from api.agents.triage.schemas import TriageExtractedItem
+
+    schema = t_schema(None, TriageAnalysis)
+    assert schema is not None
+
+    with pytest.raises(ValidationError, match="quantity must be greater than zero"):
+        TriageExtractedItem(product="Queijo coalho", quantity=0)

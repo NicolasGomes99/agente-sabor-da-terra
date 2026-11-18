@@ -364,3 +364,10 @@ async def test_resumed_session_receives_history_and_keeps_sessions_isolated() ->
     assert "Preciso pra essa sexta (01/nov)" in prompt_sent_on_resume
     assert "LOT-2026-0094" not in prompt_sent_on_resume
     assert format_history_context([]) == ""
+
+
+def test_orchestrator_schema_is_compatible_with_google_genai_transformer() -> None:
+    from google.genai._transformers import t_schema
+
+    schema = t_schema(None, IntentRouteDecision)
+    assert schema is not None

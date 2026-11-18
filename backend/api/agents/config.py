@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-DEFAULT_AGENT_MODEL = "gemini-3.5-flash"
+DEFAULT_AGENT_MODEL = "gemini-3.8-flash"
 PERNAMBUCO_TIMEZONE = timezone(timedelta(hours=-3), name="America/Recife")
 
 
