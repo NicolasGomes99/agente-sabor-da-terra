@@ -4,6 +4,7 @@ import { LoginPage } from '../features/auth/pages/LoginPage'
 import { useAuth } from '../features/auth/useAuth'
 import { ChatPage } from '../features/chat/pages/ChatPage'
 import { DocumentsPage } from '../features/documents/pages/DocumentsPage'
+import { ProducersPage } from '../features/registry/pages/ProducersPage'
 import { ProductsPage } from '../features/registry/pages/ProductsPage'
 
 function PublicRoute() {
@@ -33,7 +34,9 @@ export function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/registry" element={<Navigate to="/registry/products" replace />} />
         <Route path="/registry/products" element={<ProductsPage />} />
+        <Route path="/registry/producers" element={<ProducersPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>

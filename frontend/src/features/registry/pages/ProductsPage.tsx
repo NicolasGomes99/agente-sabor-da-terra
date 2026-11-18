@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
+import { RegistryNavigation } from '../components/RegistryNavigation'
 import { listProducts } from '../registryApi'
 import type { Product } from '../types'
 
@@ -59,6 +60,7 @@ export function ProductsPage() {
       <div className="products-page">
         <p className="products-section-label">Cadastros</p>
         <h1>Produtos</h1>
+        <RegistryNavigation />
 
         {state.status === 'loading' && <p role="status">Carregando produtos…</p>}
         {state.status === 'error' && (

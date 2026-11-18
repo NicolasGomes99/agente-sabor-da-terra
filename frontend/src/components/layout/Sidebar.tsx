@@ -51,7 +51,7 @@ export function Sidebar() {
             {item.label}
           </button>
         ))}
-        <NavLink className="sidebar-nav-item" to="/registry/products">
+        <NavLink className="sidebar-nav-item" to="/registry">
           <span aria-hidden="true">◇</span>
           Cadastros
         </NavLink>
