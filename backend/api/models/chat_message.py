@@ -1,11 +1,14 @@
-
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+if TYPE_CHECKING:
+    from .citation import Citation
 
 
 class ChatMessage(Base):
@@ -33,4 +36,9 @@ class ChatMessage(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
+    )
+
+    citations: Mapped[list["Citation"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
     )

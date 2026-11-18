@@ -17,14 +17,15 @@
 }
 
 html {
-  min-width: 20rem;
   min-height: 100%;
 }
 
 body {
-  min-width: 20rem;
+  width: 100%;
+  max-width: 100%;
   min-height: 100vh;
   margin: 0;
+  overflow-x: hidden;
   background: var(--color-background);
 }
 
@@ -114,6 +115,8 @@ textarea {
 }
 
 #root {
+  width: 100%;
+  max-width: 100%;
   min-height: 100vh;
 }
 

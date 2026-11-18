@@ -4,6 +4,7 @@ import type { ChatSession } from '../types'
 interface ChatHistoryProps {
   conversations: ChatSession[]
   activeSessionId: string | null
+  creating: boolean
   onSelect: (sessionId: string) => void
   onCreate: () => void
 }
@@ -11,6 +12,7 @@ interface ChatHistoryProps {
 export function ChatHistory({
   conversations,
   activeSessionId,
+  creating,
   onSelect,
   onCreate,
 }: ChatHistoryProps) {
@@ -18,8 +20,8 @@ export function ChatHistory({
     <aside className="chat-history" aria-label="Conversas recentes">
       <h2>Conversas</h2>
 
-      <button type="button" onClick={onCreate}>
-        + Nova conversa
+      <button type="button" onClick={onCreate} disabled={creating}>
+        {creating ? 'Criando conversa...' : '+ Nova conversa'}
       </button>
 
       <ul>

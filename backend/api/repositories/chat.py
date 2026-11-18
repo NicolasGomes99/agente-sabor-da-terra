@@ -2,9 +2,12 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
+from ..models.citation import Citation
+from ..models.document import DocumentChunk
 
 
 class ChatRepository:
@@ -16,11 +19,13 @@ class ChatRepository:
         self.session.add(chat)
         await self.session.flush()
         return chat
-    
-    async def list_sessions(self, user_id:UUID) -> list[ChatSession]:
-        stmt = (select(ChatSession)
-                .where(ChatSession.user_id == user_id)
-                .order_by(ChatSession.created_at.desc()))
+
+    async def list_sessions(self, user_id: UUID) -> list[ChatSession]:
+        stmt = (
+            select(ChatSession)
+            .where(ChatSession.user_id == user_id)
+            .order_by(ChatSession.created_at.desc())
+        )
         return list((await self.session.scalars(stmt)).all())
 
     async def get_session(self, session_id: UUID, user_id: UUID) -> ChatSession | None:
@@ -29,14 +34,34 @@ class ChatRepository:
         )
         return await self.session.scalar(stmt)
 
-    async def add_message(self, session_id: UUID, content: str) -> ChatMessage:
-        msg = ChatMessage(session_id=session_id, content=content)
+    async def add_message(
+        self, session_id: UUID, content: str, role: str = "user"
+    ) -> ChatMessage:
+        msg = ChatMessage(
+            session_id=session_id,
+            role=role,
+            content=content,
+            citations=[],
+        )
         self.session.add(msg)
         await self.session.flush()
         return msg
 
+    async def add_citation(self, message_id: UUID, chunk_id: UUID) -> Citation:
+        citation = Citation(message_id=message_id, chunk_id=chunk_id)
+        self.session.add(citation)
+        await self.session.flush()
+        return citation
+
     async def list_messages(self, session_id: UUID) -> list[ChatMessage]:
-        stmt = (select(ChatMessage)
-                .where(ChatMessage.session_id == session_id)
-                .order_by(ChatMessage.created_at.asc()))
+        stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+            .options(
+                selectinload(ChatMessage.citations)
+                .selectinload(Citation.chunk)
+                .selectinload(DocumentChunk.document)
+            )
+            .order_by(ChatMessage.created_at.asc())
+        )
         return list((await self.session.scalars(stmt)).all())

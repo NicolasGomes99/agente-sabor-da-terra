@@ -7,7 +7,10 @@ from uuid import UUID, uuid4
 
 from anyio import CancelScope
 
-from ..models.document import Document
+from ..models.chat_message import ChatMessage
+from ..models.chat_session import ChatSession
+from ..models.citation import Citation
+from ..models.document import Document, DocumentChunk
 from ..repositories.document import DocumentRepository
 from ..storage.base import DocumentReader, DocumentStorage
 
@@ -34,6 +37,27 @@ async def _finish_write[T](operation: Coroutine[object, object, T]) -> T:
 
 class DocumentNotFoundError(LookupError):
     pass
+
+
+class DocumentCitedError(Exception):
+    def __init__(
+        self,
+        document: Document,
+        citations: list[tuple[Citation, DocumentChunk, ChatMessage, ChatSession]],
+    ) -> None:
+        self.document = document
+        self.citations = citations
+        first_citation, first_chunk, first_message, first_session = citations[0]
+        excerpt = (
+            f"{first_chunk.content[:80]}..."
+            if len(first_chunk.content) > 80
+            else first_chunk.content
+        )
+        super().__init__(
+            f"Não é possível excluir o documento '{document.original_filename}' porque ele é citado "
+            f"na conversa '{first_session.title}' (citação message_id={first_citation.message_id}, "
+            f"chunk_id={first_citation.chunk_id}, trecho: \"{excerpt}\")."
+        )
 
 
 class DocumentService:
@@ -85,6 +109,11 @@ class DocumentService:
 
     async def _delete_document(self, document_id: UUID) -> None:
         document = await self._get_document(document_id)
+
+        citations = await self.repository.list_citations_by_document(document.id)
+        if citations:
+            raise DocumentCitedError(document, citations)
+
         key = document.storage_key
 
         try:
