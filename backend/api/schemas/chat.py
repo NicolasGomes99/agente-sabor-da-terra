@@ -48,10 +48,10 @@ class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    position: int
     role: str
     content: str
     created_at: datetime
-    citations: list[CitationOut] = []
 
 
 class SessionOut(BaseModel):

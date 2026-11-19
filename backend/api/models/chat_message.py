@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
-
+from sqlalchemy import Integer, UniqueConstraint
 from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
-
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "position", name="uq_chat_messages_session_position"
+        ),
+    )
     id: Mapped[UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid4
     )
@@ -42,3 +46,4 @@ class ChatMessage(Base):
         back_populates="message",
         cascade="all, delete-orphan",
     )
+    position: Mapped[int] = mapped_column(Integer)

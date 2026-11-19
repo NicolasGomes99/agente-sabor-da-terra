@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
+from sqlalchemy import func, select
 from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
 from ..models.citation import Citation
@@ -34,18 +34,17 @@ class ChatRepository:
         )
         return await self.session.scalar(stmt)
 
-    async def add_message(
-        self, session_id: UUID, content: str, role: str = "user"
-    ) -> ChatMessage:
-        msg = ChatMessage(
-            session_id=session_id,
-            role=role,
-            content=content,
-            citations=[],
+    
+    async def add_message(self, session_id: UUID, content: str) -> ChatMessage:
+        next_position = await self.session.scalar(
+            select(func.coalesce(func.max(ChatMessage.position), 0) + 1)
+            .where(ChatMessage.session_id == session_id)
         )
+        msg = ChatMessage(session_id=session_id, content=content, position=next_position)
         self.session.add(msg)
         await self.session.flush()
         return msg
+    
 
     async def add_citation(self, message_id: UUID, chunk_id: UUID) -> Citation:
         citation = Citation(message_id=message_id, chunk_id=chunk_id)
@@ -54,14 +53,7 @@ class ChatRepository:
         return citation
 
     async def list_messages(self, session_id: UUID) -> list[ChatMessage]:
-        stmt = (
-            select(ChatMessage)
-            .where(ChatMessage.session_id == session_id)
-            .options(
-                selectinload(ChatMessage.citations)
-                .selectinload(Citation.chunk)
-                .selectinload(DocumentChunk.document)
-            )
-            .order_by(ChatMessage.created_at.asc())
-        )
+        stmt = (select(ChatMessage)
+                .where(ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.position.asc()))
         return list((await self.session.scalars(stmt)).all())
