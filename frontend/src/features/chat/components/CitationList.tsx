@@ -2,8 +2,8 @@ import type { Citation } from '../types'
 
 import { CitationCard } from './CitationCard'
 
-export function CitationList({ citations }: { citations: Citation[] }) {
-  if (citations.length === 0) return null
+export function CitationList({ citations }: { citations?: Citation[] }) {
+  if (!citations?.length) return null
 
   return (
     <section className="citation-list" aria-label="Fontes da resposta">
