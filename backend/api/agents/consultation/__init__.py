@@ -13,6 +13,7 @@ from .agent import (
 from .financial import (
     FINANCIAL_SOURCE_FILENAME,
     FINANCIAL_TOOL_NAME,
+    ExtractedFinancialQueryParams,
     FinancialRecordsProvider,
     InMemoryFinancialRecordsProvider,
     build_financial_summary_tool,
@@ -26,6 +27,7 @@ from .financial import (
 )
 from .financial_formatting import (
     build_missing_exhaustive_financial_source_response,
+    build_missing_financial_parameters_response,
     compose_deterministic_financial_summary_text,
     format_financial_calculation_prompt_block,
     reconcile_financial_consultation_response,
@@ -60,6 +62,7 @@ __all__ = [
     "ConsultationInput",
     "ConsultationResponse",
     "ConsultationSourceItem",
+    "ExtractedFinancialQueryParams",
     "FinancialCalculationBucket",
     "FinancialRecordsProvider",
     "FinancialSummaryCalculation",
@@ -72,6 +75,7 @@ __all__ = [
     "build_financial_summary_tool",
     "build_insufficient_sources_message",
     "build_missing_exhaustive_financial_source_response",
+    "build_missing_financial_parameters_response",
     "calculate_producer_financial_summary",
     "compose_deterministic_financial_summary_text",
     "consultation_agent",

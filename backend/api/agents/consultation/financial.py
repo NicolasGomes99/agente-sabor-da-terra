@@ -54,6 +54,23 @@ _MONTH_NAME_RE = re.compile(
     r"setembro|outubro|novembro|dezembro)(?:\s*(?:de|/)\s*(\d{4}))?\b",
     re.IGNORECASE,
 )
+_WRITTEN_BR_DATE_RE = re.compile(
+    r"^(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
+    r"setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})$",
+    re.IGNORECASE,
+)
+_REFERENCE_DATE_CLAUSE_RE = re.compile(
+    r"\b(?:"
+    r"(?:(?:com|na|em|considerando(?:\s+a)?)\s+)?(?:data\s+de\s+)?refer[êe]ncia"
+    r"|ref\.?"
+    r"|data[- ]base"
+    r"|posi[çc][ãa]o"
+    r")\s*(?:(?:em|de|a|ao|no|na|:|=)\s*)*(?:dia\s+)?"
+    r"(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}|"
+    r"\d{1,2}\s+de\s+(?:janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
+    r"setembro|outubro|novembro|dezembro)\s+de\s+\d{4})",
+    re.IGNORECASE,
+)
 
 _EXPLICIT_FINANCIAL_SUMMARY_TERMS: tuple[str, ...] = (
     "resumo financeiro",
@@ -471,67 +488,139 @@ def is_financial_consultation_query(question: str) -> bool:
     return has_producer_signal
 
 
-def _parse_br_date(raw: str) -> date:
-    day_str, month_str, year_str = raw.split("/")
-    return date(int(year_str), int(month_str), int(day_str))
+@dataclass(frozen=True)
+class ExtractedFinancialQueryParams:
+    producer: str | None = None
+    period_start: date | None = None
+    period_end: date | None = None
+    reference_date: date | None = None
+    has_invalid_date: bool = False
+
+
+def _parse_br_date(raw: str) -> date | None:
+    try:
+        day_str, month_str, year_str = raw.split("/")
+        return date(int(year_str), int(month_str), int(day_str))
+    except ValueError:
+        return None
+
+
+def _parse_iso_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _parse_natural_date(raw: str) -> date | None:
+    cleaned = " ".join(raw.strip().split())
+    if "/" in cleaned:
+        return _parse_br_date(cleaned)
+    if "-" in cleaned:
+        return _parse_iso_date(cleaned)
+    written = _WRITTEN_BR_DATE_RE.match(cleaned)
+    if written:
+        day_num = int(written.group(1))
+        month_num = _MONTH_NAMES[_normalize_text(written.group(2))]
+        year_num = int(written.group(3))
+        try:
+            return date(year_num, month_num, day_num)
+        except ValueError:
+            return None
+    return None
 
 
 def extract_financial_query_params(
     question: str,
     *,
     reference_date: date,
-) -> tuple[str | None, date | None, date | None]:
-    """Extrai produtor e período de uma consulta financeira em linguagem natural."""
+) -> ExtractedFinancialQueryParams:
+    """Extrai produtor, período e data de referência explícita de uma consulta financeira."""
     current = _HISTORY_BLOCK_RE.sub("", question).strip()
-    producer = _extract_producer_from_text(current)
+
+    extracted_ref_date: date | None = None
+    has_invalid_date = False
+    text_without_ref = current
+
+    ref_match = _REFERENCE_DATE_CLAUSE_RE.search(current)
+    if ref_match:
+        parsed_ref = _parse_natural_date(ref_match.group(1))
+        if parsed_ref is None:
+            has_invalid_date = True
+        else:
+            extracted_ref_date = parsed_ref
+        text_without_ref = (
+            current[: ref_match.start()] + " " + current[ref_match.end() :]
+        ).strip()
+
+    producer = _extract_producer_from_text(text_without_ref)
+    anchor_date = extracted_ref_date or reference_date
 
     period_start: date | None = None
     period_end: date | None = None
 
-    iso_range = _ISO_RANGE_RE.search(current)
+    iso_range = _ISO_RANGE_RE.search(text_without_ref)
     if iso_range:
-        candidate_start = date.fromisoformat(iso_range.group(1))
-        candidate_end = date.fromisoformat(iso_range.group(2))
-        if candidate_end >= candidate_start:
+        candidate_start = _parse_iso_date(iso_range.group(1))
+        candidate_end = _parse_iso_date(iso_range.group(2))
+        if candidate_start is None or candidate_end is None or candidate_end < candidate_start:
+            has_invalid_date = True
+        else:
             period_start, period_end = candidate_start, candidate_end
     else:
-        br_range = _BR_RANGE_RE.search(current)
+        br_range = _BR_RANGE_RE.search(text_without_ref)
         if br_range:
             candidate_start = _parse_br_date(br_range.group(1))
             candidate_end = _parse_br_date(br_range.group(2))
-            if candidate_end >= candidate_start:
+            if (
+                candidate_start is None
+                or candidate_end is None
+                or candidate_end < candidate_start
+            ):
+                has_invalid_date = True
+            else:
                 period_start, period_end = candidate_start, candidate_end
         else:
-            month_match = _MONTH_NAME_RE.search(current)
+            month_match = _MONTH_NAME_RE.search(text_without_ref)
             if month_match:
                 month_key = _normalize_text(month_match.group(1))
                 month = _MONTH_NAMES[month_key]
                 year = (
                     int(month_match.group(2))
                     if month_match.group(2)
-                    else reference_date.year
+                    else anchor_date.year
                 )
                 last_day = calendar.monthrange(year, month)[1]
                 period_start = date(year, month, 1)
                 period_end = date(year, month, last_day)
             else:
-                iso_month = _ISO_MONTH_RE.search(current)
+                iso_month = _ISO_MONTH_RE.search(text_without_ref)
                 if iso_month:
                     year, month = int(iso_month.group(1)), int(iso_month.group(2))
                     if 1 <= month <= 12:
                         last_day = calendar.monthrange(year, month)[1]
                         period_start = date(year, month, 1)
                         period_end = date(year, month, last_day)
+                    else:
+                        has_invalid_date = True
                 else:
-                    br_month = _BR_MONTH_RE.search(current)
+                    br_month = _BR_MONTH_RE.search(text_without_ref)
                     if br_month:
                         month, year = int(br_month.group(1)), int(br_month.group(2))
                         if 1 <= month <= 12:
                             last_day = calendar.monthrange(year, month)[1]
                             period_start = date(year, month, 1)
                             period_end = date(year, month, last_day)
+                        else:
+                            has_invalid_date = True
 
-    return producer, period_start, period_end
+    return ExtractedFinancialQueryParams(
+        producer=producer,
+        period_start=period_start,
+        period_end=period_end,
+        reference_date=extracted_ref_date,
+        has_invalid_date=has_invalid_date,
+    )
 
 
 def _build_bucket(rows: list[_ParsedFinancialRow]) -> FinancialCalculationBucket:

@@ -30,7 +30,7 @@ A aplicação backend (rotas FastAPI de chat e fila de triagem) utiliza **`orche
 | `sender`, `buyer_name`, `channel`, `source_id` | `str \| None` | Metadados opcionais do canal de entrada para a triagem. |
 | `sources` | `list[ConsultationSourceItem]` | Trechos documentais (`DocumentChunk`) e registros recuperados por busca para consultas documentais. |
 | `financial_records` | `list[ConsultationSourceItem] \| None` | Coleção exaustiva de registros de `financeiro.csv` indexados no RAG para resumos financeiros (alternativa ou complemento ao parâmetro `financial_records_provider` de `orchestrate_request`). |
-| `producer_id`, `period_start`, `period_end` | `str \| date \| datetime \| None` | Parâmetros opcionais de produtor e período para resumos financeiros (também extraíveis de consultas em linguagem natural). |
+| `producer_id`, `period_start`, `period_end`, `financial_reference_date` | `str \| date \| datetime \| None` | Parâmetros opcionais de produtor, período e data de referência do cálculo financeiro (também extraíveis de consultas em linguagem natural, distintos da data da interação). |
 | `history` | `list[ConversationTurn]` | Histórico prévio da sessão aberta, enviado em bloco separado do texto da mensagem em análise. |
 
 ### Retorno: `OrchestratorResponse` (`api.agents.schemas.OrchestratorResponse`)

@@ -9,7 +9,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from ..callbacks import guard_untrusted_input_callback
-from ..config import get_agent_model
+from ..config import get_agent_model, to_pernambuco_date
 from .financial import (
     FINANCIAL_TOOL_NAME,
     FinancialRecordsProvider,
@@ -22,6 +22,7 @@ from .financial import (
 )
 from .financial_formatting import (
     build_missing_exhaustive_financial_source_response,
+    build_missing_financial_parameters_response,
     compose_deterministic_financial_summary_text,
     format_financial_calculation_prompt_block,
     reconcile_financial_consultation_response,
@@ -86,8 +87,9 @@ def format_consultation_prompt(
     payload: ConsultationInput,
     *,
     financial_calculation: FinancialSummaryCalculation | None = None,
+    effective_reference_date: date | None = None,
 ) -> str:
-    ref_date = payload.resolved_reference_date
+    ref_date = effective_reference_date or payload.resolved_reference_date
     ref_date_br = ref_date.strftime("%d/%m/%Y")
 
     if payload.sources:
@@ -192,6 +194,60 @@ def _extract_calculation_from_state(
     return None
 
 
+def _select_verified_financial_calculation(
+    *,
+    authoritative_calculation: FinancialSummaryCalculation | None,
+    captured_calculations: Sequence[FinancialSummaryCalculation],
+    identified_period_start: date | None,
+    identified_period_end: date | None,
+    effective_reference_date: date,
+    exhaustive_records: Sequence[Any],
+) -> tuple[FinancialSummaryCalculation | None, str | None]:
+    """Seleciona e valida deterministicamente o cálculo financeiro correspondente à solicitação."""
+    expected_ref_iso = effective_reference_date.isoformat()
+
+    if authoritative_calculation is not None:
+        return authoritative_calculation, None
+
+    if not captured_calculations:
+        return None, (
+            "A ferramenta de cálculo financeiro não foi executada e não foi possível "
+            "identificar o produtor na solicitação para calcular os valores determinísticos."
+        )
+
+    for candidate in reversed(captured_calculations):
+        if candidate.reference_date != expected_ref_iso:
+            continue
+        if (
+            identified_period_start is not None
+            and candidate.period_start != identified_period_start.isoformat()
+        ):
+            continue
+        if (
+            identified_period_end is not None
+            and candidate.period_end != identified_period_end.isoformat()
+        ):
+            continue
+        if candidate.is_ambiguous_producer:
+            return candidate, None
+        try:
+            verified = calculate_producer_financial_summary(
+                producer=candidate.producer_id,
+                period_start=candidate.period_start,
+                period_end=candidate.period_end,
+                reference_date=candidate.reference_date,
+                financial_records=exhaustive_records,
+            )
+        except ValueError:
+            continue
+        return verified, None
+
+    return None, (
+        "Os parâmetros utilizados pela ferramenta financeira divergem do período ou "
+        "da data de referência solicitados pelo funcionário."
+    )
+
+
 async def answer_document_consultation(
     payload: ConsultationInput,
     *,
@@ -216,56 +272,79 @@ async def answer_document_consultation(
         )
         return reconcile_consultation_sources(placeholder, payload)
 
-    if is_financial_query and exhaustive_records is None:
-        return build_missing_exhaustive_financial_source_response(
-            payload.resolved_reference_date.isoformat()
+    effective_reference_date = payload.resolved_reference_date
+    identified_producer: str | None = payload.producer_id
+    identified_period_start: date | None = (
+        to_pernambuco_date(payload.period_start)
+        if payload.period_start is not None
+        else None
+    )
+    identified_period_end: date | None = (
+        to_pernambuco_date(payload.period_end)
+        if payload.period_end is not None
+        else None
+    )
+
+    if is_financial_query:
+        extracted = extract_financial_query_params(
+            payload.question,
+            reference_date=payload.resolved_reference_date,
         )
+        effective_reference_date = (
+            payload.resolved_financial_reference_date
+            or extracted.reference_date
+            or payload.resolved_reference_date
+        )
+        if (
+            extracted.has_invalid_date
+            and payload.resolved_financial_reference_date is None
+            and payload.period_start is None
+            and payload.period_end is None
+        ):
+            return build_missing_financial_parameters_response(
+                effective_reference_date.isoformat(),
+                reason=(
+                    "A data de período ou de referência informada na consulta é inválida "
+                    "ou inconsistente."
+                ),
+            )
+        if exhaustive_records is None:
+            return build_missing_exhaustive_financial_source_response(
+                effective_reference_date.isoformat()
+            )
+        if identified_producer is None:
+            identified_producer = extracted.producer
+        if identified_period_start is None:
+            identified_period_start = extracted.period_start
+        if identified_period_end is None:
+            identified_period_end = extracted.period_end
 
     financial_calculation: FinancialSummaryCalculation | None = None
-    if is_financial_query and exhaustive_records is not None:
-        extracted_producer: str | None = None
-        extracted_start: date | None = None
-        extracted_end: date | None = None
+    if is_financial_query and exhaustive_records is not None and identified_producer:
+        financial_calculation = calculate_producer_financial_summary(
+            producer=identified_producer,
+            period_start=identified_period_start,
+            period_end=identified_period_end,
+            reference_date=effective_reference_date,
+            financial_records=exhaustive_records,
+        )
         if (
-            payload.producer_id is None
-            or payload.period_start is None
-            or payload.period_end is None
+            financial_calculation.is_ambiguous_producer
+            or not financial_calculation.has_any_records
         ):
-            extracted_producer, extracted_start, extracted_end = (
-                extract_financial_query_params(
-                    payload.question,
-                    reference_date=payload.resolved_reference_date,
-                )
+            deterministic_resp = ConsultationResponse(
+                answer=compose_deterministic_financial_summary_text(
+                    financial_calculation
+                ),
+                reference_date_used=financial_calculation.reference_date,
+                has_sufficient_data=False,
             )
-        target_producer = payload.producer_id or extracted_producer
-        effective_start = payload.period_start or extracted_start
-        effective_end = payload.period_end or extracted_end
-
-        if target_producer:
-            financial_calculation = calculate_producer_financial_summary(
-                producer=target_producer,
-                period_start=effective_start,
-                period_end=effective_end,
-                reference_date=payload.resolved_reference_date,
-                financial_records=exhaustive_records,
+            return reconcile_financial_consultation_response(
+                deterministic_resp,
+                financial_calculation,
+                payload,
+                exhaustive_financial_records=exhaustive_records,
             )
-            if (
-                financial_calculation.is_ambiguous_producer
-                or not financial_calculation.has_any_records
-            ):
-                deterministic_resp = ConsultationResponse(
-                    answer=compose_deterministic_financial_summary_text(
-                        financial_calculation
-                    ),
-                    reference_date_used=financial_calculation.reference_date,
-                    has_sufficient_data=False,
-                )
-                return reconcile_financial_consultation_response(
-                    deterministic_resp,
-                    financial_calculation,
-                    payload,
-                    exhaustive_financial_records=exhaustive_records,
-                )
 
     captured_calculations: list[FinancialSummaryCalculation] = []
     active_runner = runner
@@ -290,6 +369,7 @@ async def answer_document_consultation(
     prompt_text = format_consultation_prompt(
         payload,
         financial_calculation=financial_calculation,
+        effective_reference_date=effective_reference_date,
     )
     message = types.Content(
         role="user",
@@ -331,7 +411,7 @@ async def answer_document_consultation(
         elif isinstance(state_value, dict):
             state_data = {
                 **state_value,
-                "reference_date_used": payload.resolved_reference_date.isoformat(),
+                "reference_date_used": effective_reference_date.isoformat(),
             }
             raw_response = ConsultationResponse.model_validate(state_data)
         elif isinstance(state_value, str):
@@ -347,19 +427,31 @@ async def answer_document_consultation(
             f"Consultation agent finished without producing a response (run={uuid4()})."
         )
 
-    if payload.producer_id and financial_calculation is not None:
-        effective_calculation = financial_calculation
-    elif captured_calculations:
-        effective_calculation = captured_calculations[-1]
-    else:
-        effective_calculation = financial_calculation
-    if effective_calculation is not None:
+    if is_financial_query or captured_calculations:
+        if exhaustive_records is None:
+            return build_missing_exhaustive_financial_source_response(
+                effective_reference_date.isoformat()
+            )
+        verified_calculation, mismatch_reason = _select_verified_financial_calculation(
+            authoritative_calculation=financial_calculation,
+            captured_calculations=captured_calculations,
+            identified_period_start=identified_period_start,
+            identified_period_end=identified_period_end,
+            effective_reference_date=effective_reference_date,
+            exhaustive_records=exhaustive_records,
+        )
+        if verified_calculation is None:
+            return build_missing_financial_parameters_response(
+                effective_reference_date.isoformat(),
+                reason=mismatch_reason,
+            )
         return reconcile_financial_consultation_response(
             raw_response,
-            effective_calculation,
+            verified_calculation,
             payload,
             exhaustive_financial_records=exhaustive_records,
         )
+
     return reconcile_consultation_sources(raw_response, payload)
 
 
@@ -407,6 +499,7 @@ async def answer_producer_financial_summary(
         producer_id=producer,
         period_start=calculation.period_start,
         period_end=calculation.period_end,
+        financial_reference_date=calculation.reference_date,
     )
     response = await answer_document_consultation(
         payload,

@@ -115,6 +115,13 @@ class OrchestratorRequest(BaseModel):
         default=None,
         description="Data final do período solicitado para resumo financeiro.",
     )
+    financial_reference_date: datetime | date | str | None = Field(
+        default=None,
+        description=(
+            "Data de referência do cálculo financeiro quando distinta da data "
+            "da interação (`received_at`)."
+        ),
+    )
     history: list[ConversationTurn] = Field(
         default_factory=list,
         description="Histórico anterior da sessão aberta, quando retomada.",

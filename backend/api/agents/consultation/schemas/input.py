@@ -115,6 +115,13 @@ class ConsultationInput(BaseModel):
         default=None,
         description="Data final do período solicitado para o resumo financeiro.",
     )
+    financial_reference_date: datetime | date | str | None = Field(
+        default=None,
+        description=(
+            "Data de referência específica para o cálculo financeiro quando distinta "
+            "da data da interação (`reference_date`)."
+        ),
+    )
 
     @field_validator("question")
     @classmethod
@@ -124,7 +131,12 @@ class ConsultationInput(BaseModel):
             raise ValueError("question must not be blank.")
         return stripped
 
-    @field_validator("reference_date", "period_start", "period_end")
+    @field_validator(
+        "reference_date",
+        "period_start",
+        "period_end",
+        "financial_reference_date",
+    )
     @classmethod
     def _validate_optional_dates(
         cls,
@@ -139,3 +151,9 @@ class ConsultationInput(BaseModel):
         if self.reference_date is not None:
             return to_pernambuco_date(self.reference_date)
         return datetime.now(PERNAMBUCO_TIMEZONE).date()
+
+    @property
+    def resolved_financial_reference_date(self) -> date | None:
+        if self.financial_reference_date is None:
+            return None
+        return to_pernambuco_date(self.financial_reference_date)

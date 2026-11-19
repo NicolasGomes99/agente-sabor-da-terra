@@ -206,9 +206,47 @@ def build_missing_exhaustive_financial_source_response(
     )
 
 
+def build_missing_financial_parameters_response(
+    reference_date_iso: str,
+    *,
+    reason: str | None = None,
+) -> ConsultationResponse:
+    """Resposta determinística pedindo esclarecimento quando não há cálculo financeiro válido."""
+    ref_br = _format_br_date(reference_date_iso)
+    detail = (
+        reason
+        or (
+            "Não foi possível identificar de forma inequívoca os parâmetros necessários "
+            "(código ou nome completo do produtor, período e data de referência) para "
+            f"executar o cálculo financeiro determinístico em {FINANCIAL_SOURCE_FILENAME}."
+        )
+    )
+    message = (
+        f"Considerando a data de referência {ref_br} ({reference_date_iso}), "
+        f"{detail} Informe o código ou nome completo do produtor, o período e, "
+        "se aplicável, a data de referência desejada para gerar o resumo financeiro."
+    )
+    return ConsultationResponse(
+        answer=message,
+        reference_date_used=reference_date_iso,
+        source_ids=[],
+        cited_sources=[],
+        gaps_and_divergences=[
+            ConsultationGapOrDivergence(
+                kind="lacuna",
+                description=detail,
+                source_ids=[],
+            )
+        ],
+        has_sufficient_data=False,
+    )
+
+
 def _merge_reconciliation_payload(
     payload: ConsultationInput,
     exhaustive_financial_records: Sequence[ConsultationSourceItem | Any] | None,
+    *,
+    calculation_reference_date: str,
 ) -> ConsultationInput:
     merged_sources: list[ConsultationSourceItem] = []
     seen_ids: set[str] = set()
@@ -224,7 +262,12 @@ def _merge_reconciliation_payload(
             seen_ids.add(src.source_id)
             merged_sources.append(src)
 
-    return payload.model_copy(update={"sources": merged_sources})
+    return payload.model_copy(
+        update={
+            "sources": merged_sources,
+            "reference_date": calculation_reference_date,
+        }
+    )
 
 
 def reconcile_financial_consultation_response(
@@ -242,6 +285,7 @@ def reconcile_financial_consultation_response(
             if exhaustive_financial_records is not None
             else payload.financial_records
         ),
+        calculation_reference_date=calculation.reference_date,
     )
 
     if calculation.is_ambiguous_producer:

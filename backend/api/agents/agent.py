@@ -168,6 +168,7 @@ async def orchestrate_request(
             producer_id=request.producer_id,
             period_start=request.period_start,
             period_end=request.period_end,
+            financial_reference_date=request.financial_reference_date,
         )
         result = await answer_document_consultation(
             consultation_input,

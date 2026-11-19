@@ -877,14 +877,16 @@ async def test_document_queries_about_contract_payment_terms_or_sale_prices_are_
         is False
     )
 
-    # Data completa de referência (ISO ou BR) não é confundida com mês-ano do período
-    producer, start, end = extract_financial_query_params(
+    # Data completa de referência (ISO ou BR) é extraída como reference_date sem virar período explícito
+    params = extract_financial_query_params(
         "Gere o resumo financeiro de P001 com data de referência em 2026-10-15.",
-        reference_date=date(2026, 10, 15),
+        reference_date=date(2026, 11, 19),
     )
-    assert producer == "P001"
-    assert start is None
-    assert end is None
+    assert params.producer == "P001"
+    assert params.period_start is None
+    assert params.period_end is None
+    assert params.reference_date == date(2026, 10, 15)
+    assert params.has_invalid_date is False
 
     contract_source = ConsultationSourceItem(
         source_id="chunk-contrato-pnae",
@@ -921,3 +923,256 @@ async def test_document_queries_about_contract_payment_terms_or_sale_prices_are_
     assert orch_resp.result.has_sufficient_data is True
     assert orch_resp.result.source_ids == ["chunk-contrato-pnae"]
     assert "45 dias" in orch_resp.result.answer
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_request_respects_explicit_financial_reference_date_distinct_from_interaction_date() -> None:
+    # 2ª revisão PR #47 item 1: interação em 19/11/2026 pedindo resumo de P004 para setembro/2026
+    # com referência em 30/09/2026 deve classificar R$ 1.020,00 como A VENCER em 23/10/2026
+    # (e não vencidos), usando 2026-09-30 no cálculo e em reference_date_used.
+    all_records = _sample_rag_financial_sources()
+    provider = InMemoryFinancialRecordsProvider(all_records)
+    dummy_runner = FakeFinancialConsultationRunner(
+        {
+            "answer": "Resumo preliminar.",
+            "reference_date_used": "2026-11-19",
+            "source_ids": [],
+            "cited_sources": [],
+            "gaps_and_divergences": [],
+            "has_sufficient_data": True,
+        }
+    )
+
+    orch_resp = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-ref-diff-1",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Gere o resumo financeiro de P004 para setembro de 2026, "
+                "com referência em 30/09/2026."
+            ),
+            sources=[],
+        ),
+        consultation_runner=dummy_runner,
+        financial_records_provider=provider,
+    )
+
+    assert isinstance(orch_resp.result, ConsultationResponse)
+    assert orch_resp.result.reference_date_used == "2026-09-30"
+    assert "30/09/2026 (2026-09-30)" in orch_resp.result.answer
+    assert "Pendências a vencer em 23/10/2026 (2026-10-23): R$ 1.020,00" in orch_resp.result.answer
+    assert "Pendências vencidas" not in orch_resp.result.answer
+    assert orch_resp.result.source_ids == ["chunk-fin-006", "chunk-fin-007"]
+    # A data da interação (19/11/2026) continua preservada no histórico da sessão
+    assert orch_resp.session_history[0].received_at == "2026-11-19"
+
+    # Também funciona quando a referência vem por extenso ANTES do período
+    orch_written_ref = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-ref-diff-written",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Com referência em 30 de setembro de 2026, gere o resumo financeiro "
+                "de P004 para setembro de 2026."
+            ),
+            sources=[],
+        ),
+        consultation_runner=dummy_runner,
+        financial_records_provider=provider,
+    )
+    assert isinstance(orch_written_ref.result, ConsultationResponse)
+    assert orch_written_ref.result.reference_date_used == "2026-09-30"
+    assert "Pendências a vencer em 23/10/2026" in orch_written_ref.result.answer
+
+    # Sem referência explícita na pergunta, usa a data da interação (19/11/2026 -> vencido!)
+    orch_interaction_ref = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-ref-interaction",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text="Gere o resumo financeiro de P004 para setembro de 2026.",
+            sources=[],
+        ),
+        consultation_runner=dummy_runner,
+        financial_records_provider=provider,
+    )
+    assert isinstance(orch_interaction_ref.result, ConsultationResponse)
+    assert orch_interaction_ref.result.reference_date_used == "2026-11-19"
+    assert "Pendências vencidas (vencimento em 23/10/2026 (2026-10-23)): R$ 1.020,00" in orch_interaction_ref.result.answer
+
+
+@pytest.mark.asyncio
+async def test_financial_query_without_tool_execution_or_with_divergent_tool_params_never_returns_unverified_values() -> None:
+    # 2ª revisão PR #47 item 2:
+    # (A) Quando produtor não é identificado e o modelo NÃO executa a ferramenta financeira,
+    #     NÃO pode cair na reconciliação documental comum nem exibir valores sem cálculo determinístico.
+    # (B) Quando os parâmetros já foram extraídos da pergunta, chamada posterior da ferramenta
+    #     com produtor/período/referência divergentes NÃO pode substituir o cálculo solicitado.
+    # (C) Quando produtor não foi extraído e a ferramenta é chamada com período ou referência
+    #     divergentes do pedido, a chamada divergente é rejeitada e pede esclarecimento.
+    # (D) Quando a ferramenta é chamada com parâmetros compatíveis mas valores adulterados no evento,
+    #     o recálculo determinístico sobre os registros exaustivos prevalece.
+    all_records = _sample_rag_financial_sources()
+    provider = InMemoryFinancialRecordsProvider(all_records)
+    tool_fn = build_financial_summary_tool(financial_records_provider=provider)
+
+    # (A) Produtor não identificado + modelo NÃO executa a ferramenta + tenta inventar R$ 1.500,00
+    no_tool_runner = FakeFinancialConsultationRunner(
+        {
+            "answer": "A produtora tem R$ 1.500,00 a receber (FIN-2026-006 em financeiro.csv).",
+            "reference_date_used": "2026-09-30",
+            "source_ids": ["chunk-fin-006"],
+            "cited_sources": [],
+            "gaps_and_divergences": [],
+            "has_sufficient_data": True,
+        }
+    )
+    resp_no_tool = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-no-tool",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Quanto essa produtora tem a receber em setembro de 2026 "
+                "com referência em 30/09/2026?"
+            ),
+            sources=[all_records[3]],
+        ),
+        consultation_runner=no_tool_runner,
+        financial_records_provider=provider,
+    )
+    assert isinstance(resp_no_tool.result, ConsultationResponse)
+    assert resp_no_tool.result.has_sufficient_data is False
+    assert resp_no_tool.result.source_ids == []
+    assert resp_no_tool.result.cited_sources == []
+    assert resp_no_tool.result.reference_date_used == "2026-09-30"
+    assert "R$ 1.500,00" not in resp_no_tool.result.answer
+    assert "produtor" in resp_no_tool.result.answer.lower()
+    assert any(g.kind == "lacuna" for g in resp_no_tool.result.gaps_and_divergences)
+
+    # (B) Parâmetros extraídos da pergunta (P004, set/2026, ref 30/09/2026), mas runner
+    #     emite chamada de ferramenta divergente para P001 em out/2026 com ref 19/11/2026
+    divergent_p001_payload = tool_fn("P001", "2026-10-01", "2026-10-31", "2026-11-19")
+    divergent_runner_b = FakeFinancialConsultationRunner(
+        {
+            "answer": "Resumo de P001: R$ 940,00.",
+            "reference_date_used": "2026-11-19",
+            "source_ids": ["chunk-fin-001", "chunk-fin-002"],
+            "cited_sources": [],
+            "gaps_and_divergences": [],
+            "has_sufficient_data": True,
+        },
+        tool_function_response=divergent_p001_payload,
+    )
+    resp_extracted_protected = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-divergent-extracted",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Gere o resumo financeiro de P004 para setembro de 2026, "
+                "com referência em 30/09/2026."
+            ),
+            sources=[],
+        ),
+        consultation_runner=divergent_runner_b,
+        financial_records_provider=provider,
+    )
+    assert isinstance(resp_extracted_protected.result, ConsultationResponse)
+    assert resp_extracted_protected.result.reference_date_used == "2026-09-30"
+    assert "P004" in resp_extracted_protected.result.answer
+    assert "R$ 1.020,00" in resp_extracted_protected.result.answer
+    assert "Pendências a vencer em 23/10/2026" in resp_extracted_protected.result.answer
+    assert "R$ 940,00" not in resp_extracted_protected.result.answer
+    assert resp_extracted_protected.result.source_ids == ["chunk-fin-006", "chunk-fin-007"]
+
+    # (C) Produtor não extraído, mas período (set/2026) e referência (30/09/2026) foram solicitados;
+    #     ferramenta chamada com referência divergente (2026-11-19) é rejeitada e pede esclarecimento
+    divergent_ref_payload = tool_fn("P004", "2026-09-01", "2026-09-30", "2026-11-19")
+    divergent_runner_c = FakeFinancialConsultationRunner(
+        {
+            "answer": "R$ 1.020,00 vencidos.",
+            "reference_date_used": "2026-11-19",
+            "source_ids": ["chunk-fin-006", "chunk-fin-007"],
+            "cited_sources": [],
+            "gaps_and_divergences": [],
+            "has_sufficient_data": True,
+        },
+        tool_function_response=divergent_ref_payload,
+    )
+    resp_divergent_unextracted = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-divergent-unextracted",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Quanto essa produtora tem a receber em setembro de 2026 "
+                "com referência em 30/09/2026?"
+            ),
+            sources=[],
+        ),
+        consultation_runner=divergent_runner_c,
+        financial_records_provider=provider,
+    )
+    assert isinstance(resp_divergent_unextracted.result, ConsultationResponse)
+    assert resp_divergent_unextracted.result.has_sufficient_data is False
+    assert resp_divergent_unextracted.result.source_ids == []
+    assert resp_divergent_unextracted.result.reference_date_used == "2026-09-30"
+    assert "R$ 1.020,00" not in resp_divergent_unextracted.result.answer
+    assert "divergem" in resp_divergent_unextracted.result.answer.lower()
+
+    # (D) Produtor não extraído, chamada de ferramenta com parâmetros compatíveis mas valor adulterado
+    #     no payload do evento -> recálculo determinístico sobre registros exaustivos restaura R$ 1.020,00
+    tampered_matching_payload = tool_fn("P004", "2026-09-01", "2026-09-30", "2026-09-30")
+    tampered_matching_payload["sales_in_period"]["formatted_total"] = "R$ 99.999,00"
+    tampered_runner = FakeFinancialConsultationRunner(
+        {
+            "answer": "Vendas de R$ 99.999,00.",
+            "reference_date_used": "2026-09-30",
+            "source_ids": [],
+            "cited_sources": [],
+            "gaps_and_divergences": [],
+            "has_sufficient_data": True,
+        },
+        tool_function_response=tampered_matching_payload,
+    )
+    resp_reverified = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-reverified",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Quanto essa produtora tem a receber em setembro de 2026 "
+                "com referência em 30/09/2026?"
+            ),
+            sources=[],
+        ),
+        consultation_runner=tampered_runner,
+        financial_records_provider=provider,
+    )
+    assert isinstance(resp_reverified.result, ConsultationResponse)
+    assert resp_reverified.result.has_sufficient_data is True
+    assert "R$ 1.020,00" in resp_reverified.result.answer
+    assert "R$ 99.999,00" not in resp_reverified.result.answer
+    assert resp_reverified.result.reference_date_used == "2026-09-30"
+
+    # (E) Data inválida na pergunta (ex.: 31/02/2026) solicita esclarecimento sem falhar com exceção
+    resp_invalid_date = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="chat-fin-invalid-date",
+            flow=OrchestratorFlow.CONSULTATION,
+            received_at="2026-11-19",
+            message_text=(
+                "Gere o resumo financeiro de P004 para setembro de 2026 "
+                "com referência em 31/02/2026."
+            ),
+            sources=[],
+        ),
+        financial_records_provider=provider,
+    )
+    assert isinstance(resp_invalid_date.result, ConsultationResponse)
+    assert resp_invalid_date.result.has_sufficient_data is False
+    assert resp_invalid_date.result.source_ids == []
+    assert "inválida" in resp_invalid_date.result.answer.lower()
