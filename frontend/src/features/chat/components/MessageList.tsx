@@ -1,6 +1,8 @@
 
 import type { ChatMessage } from '../types'
 
+import { CitationList } from './CitationList'
+
 interface MessageListProps {
   messages: ChatMessage[]
   className?: string
@@ -41,6 +43,8 @@ export function MessageList({
             </span>
 
             <p>{message.content}</p>
+
+            {isAssistant && <CitationList citations={message.citations} />}
           </article>
         )
       })}

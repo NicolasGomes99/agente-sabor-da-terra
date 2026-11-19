@@ -5,6 +5,11 @@ import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
 import { DocumentPreview } from '../components/DocumentPreview'
 import {
+  canPreviewDocument,
+  isTextDocument,
+  saveDownload,
+} from '../documentFiles'
+import {
   deleteDocument,
   downloadDocument,
   listDocuments,
@@ -13,39 +18,12 @@ import {
 } from '../documentsApi'
 import './documents.css'
 
-const textExtensions = new Set(['txt', 'md', 'csv', 'json'])
-const mediaExtensions = new Set(['pdf', 'gif', 'jpg', 'jpeg', 'png', 'webp'])
-
-function fileExtension(filename: string) {
-  const separator = filename.lastIndexOf('.')
-  return separator === -1 ? '' : filename.slice(separator + 1).toLowerCase()
-}
-
-function canPreviewDocument(filename: string) {
-  const extension = fileExtension(filename)
-  return textExtensions.has(extension) || mediaExtensions.has(extension)
-}
-
 type ListState =
   | { status: 'loading' }
   | { status: 'error' }
   | { status: 'ready'; documents: DocumentRecord[] }
 
 type DownloadState = { status: 'pending' } | { status: 'error'; message: string }
-
-function saveDownload(blob: Blob, filename: string) {
-  const link = document.createElement('a')
-  const url = URL.createObjectURL(blob)
-  try {
-    link.href = url
-    link.download = filename
-    document.body.append(link)
-    link.click()
-  } finally {
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
-  }
-}
 
 export function DocumentsPage() {
   const { logout } = useAuth()
@@ -188,15 +166,24 @@ export function DocumentsPage() {
       setSelectedDocument((current) => current?.id === id ? null : current)
     } catch (error) {
       if (lifetime.signal.aborted) return
-      const status = error instanceof ApiError ? error.status : undefined
+      const apiError = error instanceof ApiError ? error : null
+      const status = apiError?.status
+      const detail = apiError?.details
       if (status === 401) {
         logout()
       } else {
         setDeleteError({
           id,
-          message: status === 404
-            ? 'O documento não está mais disponível no servidor.'
-            : 'Não foi possível confirmar a exclusão do documento.',
+          message: status === 409
+            ? typeof detail === 'object'
+              && detail !== null
+              && 'detail' in detail
+              && typeof detail.detail === 'string'
+              ? detail.detail
+              : 'O documento está citado em uma conversa e não pode ser excluído.'
+            : status === 404
+              ? 'O documento não está mais disponível no servidor.'
+              : 'Não foi possível confirmar a exclusão do documento.',
         })
       }
     } finally {
@@ -310,7 +297,7 @@ export function DocumentsPage() {
           <DocumentPreview
             key={selectedDocument.id}
             document={selectedDocument}
-            asText={textExtensions.has(fileExtension(selectedDocument.original_filename))}
+            asText={isTextDocument(selectedDocument.original_filename)}
             onClose={() => setSelectedDocument(null)}
           />
         )}
