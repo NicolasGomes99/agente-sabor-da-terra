@@ -5,7 +5,7 @@ import { useAuth } from '../../features/auth/useAuth'
 const navigationItems = [
   { label: 'Triagem', available: false },
   { label: 'Pedidos', available: false },
-  { label: 'Cadastros', available: false },
+  { label: 'Agendamentos', available: false },
 ]
 
 export function Sidebar() {
@@ -51,6 +51,10 @@ export function Sidebar() {
             {item.label}
           </button>
         ))}
+        <NavLink className="sidebar-nav-item" to="/registry">
+          <span aria-hidden="true">◇</span>
+          Cadastros
+        </NavLink>
       </nav>
 
       <div className="sidebar-footer">

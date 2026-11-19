@@ -1,7 +1,7 @@
 """Use a PostgreSQL enum for chat message roles.
 
 Revision ID: 0005_chat_message_role_enum
-Revises: 0004_create_products
+Revises: cecd0d851e86
 """
 
 from collections.abc import Sequence
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0005_chat_message_role_enum"
-down_revision: str | None = "0004_create_products"
+down_revision: str | None = "cecd0d851e86"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

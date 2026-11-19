@@ -14,7 +14,7 @@ from sqlalchemy.pool import NullPool
 from testcontainers.community.postgres import PostgresContainer
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
-LEGACY_REVISION = "0004_create_products"
+LEGACY_REVISION = "cecd0d851e86"
 ROLE_REVISION = "0005_chat_message_role_enum"
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
