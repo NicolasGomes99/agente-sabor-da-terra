@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import date
+from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -11,51 +12,101 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.app import app, fastapi_app
 from api.dependencies import get_current_user, get_order_service
 from api.models.order import Order
+from api.models.order_item import OrderItem
+from api.models.product import Product
 from api.models.user import User
 from api.services.order import OrderService
 
 ORDER_ID = uuid4()
+PRODUCT_ID = uuid4()
+ITEM_ID = uuid4()
 PAYLOAD = {
     "buyer": "Migration review test",
-    "products": "Tomato: 10 kg",
     "conditions": "Morning delivery",
     "delivery_start_date": "2026-12-05",
     "delivery_end_date": None,
+    "items": [
+        {
+            "product_id": str(PRODUCT_ID),
+            "quantity": "10",
+            "unit": "kg",
+        }
+    ],
 }
 
 
 @pytest.fixture
 def order_service(monkeypatch: pytest.MonkeyPatch) -> Mock:
-    order = Order(
-        id=ORDER_ID,
-        session_id=None,
-        buyer=PAYLOAD["buyer"],
-        products=PAYLOAD["products"],
-        conditions=PAYLOAD["conditions"],
-        delivery_start_date=date(2026, 12, 5),
-        delivery_end_date=None,
-        cancelled=False,
+    product = Product(
+        id=PRODUCT_ID,
+        name="Tomate",
     )
-    service = Mock(spec=OrderService)
-    for name in ("create_order", "get_order", "update_order"):
-        setattr(service, name, AsyncMock(return_value=order))
-    service.list_orders = AsyncMock(return_value=[order])
-    cancelled = Order(
-        id=ORDER_ID,
-        **{**PAYLOAD, "delivery_start_date": date(2026, 12, 5)},
-        session_id=None,
-        cancelled=True,
-    )
-    service.cancel_order = AsyncMock(return_value=cancelled)
-    user = User(id=uuid4(), email="test@example.com", password_hash="test")
-    monkeypatch.setitem(
-        fastapi_app.dependency_overrides, get_current_user, lambda: user
-    )
-    monkeypatch.setitem(
-        fastapi_app.dependency_overrides, get_order_service, lambda: service
-    )
-    return service
 
+    def make_order(*, cancelled: bool) -> Order:
+        return Order(
+            id=ORDER_ID,
+            version=2 if cancelled else 1,
+            session_id=None,
+            buyer=PAYLOAD["buyer"],
+            products="",
+            conditions=PAYLOAD["conditions"],
+            delivery_start_date=date(2026, 12, 5),
+            delivery_end_date=None,
+            cancelled=cancelled,
+            items=[
+                OrderItem(
+                    id=ITEM_ID,
+                    product_id=PRODUCT_ID,
+                    product=product,
+                    quantity=Decimal(10),
+                    unit="kg",
+                )
+            ],
+        )
+
+    order = make_order(cancelled=False)
+    cancelled_order = make_order(cancelled=True)
+
+    service = Mock(spec=OrderService)
+
+    for name in (
+        "create_order",
+        "get_order",
+        "update_order",
+    ):
+        setattr(
+            service,
+            name,
+            AsyncMock(return_value=order),
+        )
+
+    service.list_orders = AsyncMock(
+        return_value=[order],
+    )
+
+    service.cancel_order = AsyncMock(
+        return_value=cancelled_order,
+    )
+
+    user = User(
+        id=uuid4(),
+        email="test@example.com",
+        password_hash="test",
+    )
+
+    monkeypatch.setitem(
+        fastapi_app.dependency_overrides,
+        get_current_user,
+        lambda: user,
+    )
+
+    monkeypatch.setitem(
+        fastapi_app.dependency_overrides,
+        get_order_service,
+        lambda: service,
+    )
+
+    return service
 
 @pytest_asyncio.fixture
 async def client(order_service: Mock) -> AsyncIterator[httpx.AsyncClient]:
@@ -84,7 +135,25 @@ async def test_order_routes_remain_registered(
     expected_status: int,
     service_method: str,
 ) -> None:
-    response = await client.request(method, path, json=PAYLOAD)
+    if method == "PUT":
+        payload = {
+            **PAYLOAD,
+            "version": 1,
+            "items": [
+                {
+                    **PAYLOAD["items"][0],
+                    "id": str(ITEM_ID),
+                }
+            ],
+        }
+        response = await client.request(method,path, json=payload)
+
+    elif method == "POST" and path == "/orders":
+        response = await client.request(method, path, json=PAYLOAD)
+
+    else:
+        response = await client.request(method, path)
+
     assert response.status_code == expected_status
     getattr(order_service, service_method).assert_awaited_once()
     body = response.json()
@@ -93,6 +162,9 @@ async def test_order_routes_remain_registered(
         body = body[0]
     assert body["id"] == str(ORDER_ID)
     assert body["cancelled"] is (service_method == "cancel_order")
+    assert body["items"][0]["id"] == str(ITEM_ID)
+    assert body["items"][0]["product_id"] == str(PRODUCT_ID)
+    assert body["items"][0]["product"]["name"] == "Tomate"
 
 
 @pytest.mark.asyncio
@@ -125,3 +197,15 @@ def test_order_dependency_injects_the_session() -> None:
     service = get_order_service(session)
     assert isinstance(service, OrderService)
     assert service.repository.session is session
+
+
+@pytest.mark.asyncio
+async def test_stale_order_maps_to_conflict(
+    client: httpx.AsyncClient, order_service: Mock,
+) -> None:
+    from api.services.order import OrderConflictError
+
+    order_service.update_order.side_effect = OrderConflictError("Pedido alterado.")
+    response = await client.put(f"/orders/{ORDER_ID}", json={**PAYLOAD, "version": 1})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "order_version_conflict"

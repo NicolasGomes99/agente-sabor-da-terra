@@ -289,7 +289,17 @@ def test_solicitation_migration_upgrade_downgrade_upgrade(
     )
     assert revision is not None
     assert revision.down_revision == PARENT_REVISION
-    assert ScriptDirectory.from_config(config).get_heads() == [MERGE_REVISION]
+    script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+
+    assert len(heads) == 1
+    assert MERGE_REVISION in {
+        migration.revision
+        for migration in script.walk_revisions(
+            base="base",
+            head=heads[0],
+        )
+    }
 
     with PostgresContainer(
         image="postgres:16-alpine",
@@ -371,7 +381,7 @@ def test_solicitation_migration_upgrade_downgrade_upgrade(
 
         command.upgrade(config, "head")
         tables, current = asyncio.run(_snapshot(url))
-        assert current == MERGE_REVISION
+        assert current == ScriptDirectory.from_config(config).get_current_head()
         assert {"citations", "document_chunks", "solicitations"} <= tables
         assert asyncio.run(
             _count(
@@ -406,7 +416,7 @@ def test_full_migration_history_upgrades_from_zero_and_existing_main(
 
         command.upgrade(config, "head")
         tables, current = asyncio.run(_snapshot(url))
-        assert current == MERGE_REVISION
+        assert current == ScriptDirectory.from_config(config).get_current_head()
         assert {
             "users",
             "chat_sessions",
@@ -427,7 +437,7 @@ def test_full_migration_history_upgrades_from_zero_and_existing_main(
         command.upgrade(config, "head")
 
         tables, current = asyncio.run(_snapshot(url))
-        assert current == MERGE_REVISION
+        assert current == ScriptDirectory.from_config(config).get_current_head()
         assert "solicitations" in tables
         asyncio.run(_check_schema(url))
         assert asyncio.run(
