@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
 from ..models.chat_message import ChatMessage, ChatMessageRole
 from ..models.chat_session import ChatSession
 from ..models.citation import Citation
@@ -54,7 +55,7 @@ class ChatRepository:
         self.session.add(msg)
         await self.session.flush()
         return msg
-    
+
 
     async def add_citation(self, message_id: UUID, chunk_id: UUID) -> Citation:
         citation = Citation(message_id=message_id, chunk_id=chunk_id)
