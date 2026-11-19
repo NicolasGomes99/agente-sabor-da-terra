@@ -31,11 +31,13 @@ from api.models.document import Document, DocumentChunk
 from api.models.solicitation import SolicitationType, SolicitationUrgency
 from api.repositories.chat import normalize_message_reference_timestamp
 from api.schemas.agent_integration import (
+    AgentPreparedResponse,
     DocumentRetrievalContext,
     DocumentRetrievalError,
     InMemoryDocumentSourceProvider,
     PreparedTriageContext,
 )
+from api.schemas.chat import MessageCreate
 from api.services.agent_integration import (
     SessionMessageMismatchError,
     chat_message_role_to_turn_role,
@@ -111,8 +113,6 @@ def _make_chat_message(
     position: int,
     flow: str | None = None,
     reference_received_at: datetime | None = None,
-    source_id: str | None = None,
-    context_metadata: dict[str, Any] | None = None,
     created_at: datetime | None = None,
     message_id: UUID | None = None,
 ) -> ChatMessage:
@@ -124,10 +124,30 @@ def _make_chat_message(
         position=position,
         flow=flow,
         reference_received_at=reference_received_at,
-        source_id=source_id,
-        context_metadata=context_metadata,
         created_at=created_at or datetime(2026, 11, 1, 12, position, tzinfo=UTC),
     )
+
+
+def test_message_create_aligns_blank_validation_with_conversation_turn() -> None:
+    # Ponto 1 da revisão: MessageCreate e ConversationTurn rejeitam mensagens
+    # vazias ou compostas exclusivamente por espaços.
+    for blank in ("", " ", "   \n\t  "):
+        with pytest.raises(ValidationError):
+            MessageCreate(content=blank)
+        with pytest.raises(ValidationError):
+            ConversationTurn(role="user", content=blank)
+        with pytest.raises(ValidationError):
+            AgentPreparedResponse(
+                session_id=uuid4(),
+                selected_flow="consultation",
+                selected_agent="consultation_agent",
+                content=blank,
+            )
+
+    valid = MessageCreate(content="  Preciso consultar o lote LOT-2026-0094  ")
+    assert valid.content == "Preciso consultar o lote LOT-2026-0094"
+    turn = ConversationTurn(role="user", content=valid.content)
+    assert turn.content == valid.content
 
 
 def test_agent_contracts_accept_uuids_and_reject_invalid_types() -> None:
@@ -230,7 +250,6 @@ def test_messages_to_conversation_turns_preserves_order_roles_metadata_and_isola
         position=1,
         flow=None,
         reference_received_at=None,
-        source_id=None,
     )
     msg_agent = _make_chat_message(
         session_id=session_id,
@@ -239,7 +258,6 @@ def test_messages_to_conversation_turns_preserves_order_roles_metadata_and_isola
         position=2,
         flow=ChatMessageFlow.TRIAGE.value,
         reference_received_at=ref_oct_28,
-        source_id="PED-2026-003",
     )
     msg_current = _make_chat_message(
         session_id=session_id,
@@ -267,7 +285,7 @@ def test_messages_to_conversation_turns_preserves_order_roles_metadata_and_isola
     assert turns[1].content == "Análise inicial da triagem."
     assert turns[1].flow == "triage"
     assert turns[1].received_at == ref_oct_28
-    assert turns[1].source_id == "PED-2026-003"
+    assert turns[1].source_id is None
 
     # Rejeita mistura de sessões
     foreign_msg = _make_chat_message(
@@ -300,8 +318,6 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
             position=1,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=oct_28,
-            source_id="PED-2026-003",
-            context_metadata={"sender": "Supermercado Boa Vista", "channel": "whatsapp"},
         ),
         _make_chat_message(
             session_id=session_id,
@@ -310,7 +326,6 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
             position=2,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=oct_28,
-            source_id="PED-2026-003",
         ),
         # Consulta intermediária em novembro NÃO pode sobrescrever a data original da triagem!
         _make_chat_message(
@@ -320,7 +335,6 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
             position=3,
             flow=ChatMessageFlow.CONSULTATION.value,
             reference_received_at=nov_19,
-            source_id="PED-2026-003",
         ),
         _make_chat_message(
             session_id=session_id,
@@ -333,15 +347,23 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
 
     recovered = extract_triage_context_from_messages(persisted[:-1], session_id=session_id)
     assert recovered.original_received_at == oct_28
-    assert recovered.source_id == "PED-2026-003"
-    assert recovered.sender == "Supermercado Boa Vista"
-    assert recovered.channel == "whatsapp"
+    assert recovered.source_id is None
+    assert recovered.sender is None
+    assert recovered.channel is None
 
+    # Metadados originais de recebimento (previstos em EntradaRecebida da #39) são
+    # recebidos por parâmetro via PreparedTriageContext, enquanto a data original
+    # (28/10/2026) é reconstruída automaticamente de chat_messages.reference_received_at.
     req = prepare_triage_chat_request(
         session_id=session_id,
         message_text="O cliente confirmou 30 kg de queijo coalho.",
         persisted_messages=persisted,
         interaction_at=nov_19,
+        triage_context=PreparedTriageContext(
+            source_id="PED-2026-003",
+            sender="Supermercado Boa Vista",
+            channel="whatsapp",
+        ),
         exclude_message_id=current_msg_id,
     )
 
@@ -360,7 +382,7 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
         for turn in req.history
     )
 
-    # Se houver nova triagem na mesma sessão, extract_triage_context_from_messages usa os metadados mais recentes
+    # Se houver nova triagem na mesma sessão, extract_triage_context_from_messages usa a referência mais recente
     second_triage = [
         _make_chat_message(
             session_id=session_id,
@@ -369,8 +391,6 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
             position=1,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=oct_28,
-            source_id="PED-2026-003",
-            context_metadata={"sender": "Supermercado Antigo", "channel": "whatsapp"},
         ),
         _make_chat_message(
             session_id=session_id,
@@ -379,15 +399,10 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
             position=2,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=nov_19,
-            source_id="PED-2026-099",
-            context_metadata={"sender": "Restaurante Novo", "channel": "gmail"},
         ),
     ]
     latest_ctx = extract_triage_context_from_messages(second_triage, session_id=session_id)
     assert latest_ctx.original_received_at == nov_19
-    assert latest_ctx.source_id == "PED-2026-099"
-    assert latest_ctx.sender == "Restaurante Novo"
-    assert latest_ctx.channel == "gmail"
 
     # Também funciona para registro legado sem metadados quando PreparedTriageContext informa a origem (#39)
     legacy_msg = _make_chat_message(
@@ -641,6 +656,29 @@ def test_convert_triage_and_consultation_responses_preserve_structured_data_and_
     assert prepared.reference_received_at is not None
     assert to_pernambuco_date(prepared.reference_received_at) == date(2026, 9, 30)
 
+    # Ponto 2 da revisão: original_request de outra sessão deve ser rejeitado
+    other_session_request = OrchestratorRequest(
+        session_id=uuid4(),  # type: ignore[arg-type]
+        message_text="Resumo financeiro de outra sessão",
+        sources=[allowed_source],
+        financial_records=[financial_source],
+    )
+    with pytest.raises(SessionMessageMismatchError):
+        convert_orchestrator_response(
+            fin_orch_resp,
+            original_request=other_session_request,
+        )
+
+    invalid_session_request = OrchestratorRequest(
+        session_id="sessao-nao-uuid",
+        message_text="Requisição com session_id inválido",
+    )
+    with pytest.raises(ValueError, match="OrchestratorRequest.session_id must be a valid UUID"):
+        convert_orchestrator_response(
+            fin_orch_resp,
+            original_request=invalid_session_request,
+        )
+
     # Inconsistência entre selected_flow e tipo de result é rejeitada
     with pytest.raises(ValueError, match="Inconsistent OrchestratorResponse"):
         convert_orchestrator_response(
@@ -671,7 +709,6 @@ async def test_prepared_requests_work_with_orchestrate_request_without_ai_or_ram
             position=1,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=oct_28,
-            source_id="PED-2026-003",
         ),
         _make_chat_message(
             session_id=session_id,
@@ -680,7 +717,6 @@ async def test_prepared_requests_work_with_orchestrate_request_without_ai_or_ram
             position=2,
             flow=ChatMessageFlow.TRIAGE.value,
             reference_received_at=oct_28,
-            source_id="PED-2026-003",
         ),
     ]
 
@@ -689,6 +725,11 @@ async def test_prepared_requests_work_with_orchestrate_request_without_ai_or_ram
         message_text="Comprador confirmou entrega na mesma data, pela manhã.",
         persisted_messages=persisted_triage,
         interaction_at=nov_19,
+        triage_context=PreparedTriageContext(
+            source_id="PED-2026-003",
+            sender="Supermercado Boa Vista",
+            channel="whatsapp",
+        ),
         flow=OrchestratorFlow.TRIAGE,
     )
     fake_triage_runner = _FakeAgentRunner(

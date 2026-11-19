@@ -1,6 +1,5 @@
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -61,13 +60,6 @@ def _normalize_flow(value: ChatMessageFlow | str | None) -> str | None:
     return ChatMessageFlow(cleaned).value
 
 
-def _normalize_source_id(value: UUID | str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = str(value).strip()
-    return cleaned or None
-
-
 class ChatRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -103,24 +95,24 @@ class ChatRepository:
         role: ChatMessageRole = ChatMessageRole.USER,
         flow: ChatMessageFlow | str | None = None,
         reference_received_at: datetime | date | str | None = None,
-        source_id: UUID | str | None = None,
-        context_metadata: dict[str, Any] | None = None,
     ) -> ChatMessage:
+        normalized_content = content.strip()
+        if not normalized_content:
+            raise ValueError("Message content must not be blank.")
+
         next_position = await self.session.scalar(
             select(func.coalesce(func.max(ChatMessage.position), 0) + 1)
             .where(ChatMessage.session_id == session_id)
         )
         msg = ChatMessage(
             session_id=session_id,
-            content=content,
+            content=normalized_content,
             role=role,
             position=next_position,
             flow=_normalize_flow(flow),
             reference_received_at=normalize_message_reference_timestamp(
                 reference_received_at
             ),
-            source_id=_normalize_source_id(source_id),
-            context_metadata=dict(context_metadata) if context_metadata is not None else None,
             citations=[],
         )
         self.session.add(msg)
@@ -142,8 +134,6 @@ class ChatRepository:
         chunk_ids: Sequence[UUID] = (),
         flow: ChatMessageFlow | str | None = None,
         reference_received_at: datetime | date | str | None = None,
-        source_id: UUID | str | None = None,
-        context_metadata: dict[str, Any] | None = None,
     ) -> ChatMessage:
         """Persiste mensagem e citações via flush na mesma transação ativa."""
         msg = await self.add_message(
@@ -152,8 +142,6 @@ class ChatRepository:
             role=role,
             flow=flow,
             reference_received_at=reference_received_at,
-            source_id=source_id,
-            context_metadata=context_metadata,
         )
         seen_chunk_ids: set[UUID] = set()
         for chunk_id in chunk_ids:

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from api import database
 from api.agents import (
     OrchestratorFlow,
+    OrchestratorRequest,
     OrchestratorResponse,
     orchestrate_request,
 )
@@ -43,6 +44,7 @@ from api.schemas.chat import MessageOut
 from api.schemas.solicitation import SolicitationCreate
 from api.services.agent_integration import (
     AgentIntegrationService,
+    SessionMessageMismatchError,
     document_chunks_to_source_items,
 )
 from api.services.auth import AuthService
@@ -249,13 +251,20 @@ async def test_triage_continuation_in_november_reconstructs_october_receipt_from
         "O comprador confirmou 25 kg de queijo coalho mantendo o prazo.",
     )
 
-    # Nova instância do serviço reconstrói tudo do PostgreSQL
+    # Nova instância do serviço reconstrói o histórico e a data original (28/10/2026)
+    # a partir do PostgreSQL, enquanto os metadados de origem (previstos em EntradaRecebida #39)
+    # são informados por parâmetro via PreparedTriageContext.
     integration = AgentIntegrationService(ChatRepository(db_session))
     request, _ = await integration.prepare_triage_chat_input(
         solicitation.session_id,
         staff_msg.content,
         interaction_at="2026-11-19T16:00:00-03:00",
-        triage_context=PreparedTriageContext(solicitation_id=solicitation.id),
+        triage_context=PreparedTriageContext(
+            solicitation_id=solicitation.id,
+            source_id="PED-2026-003",
+            sender="Supermercado Boa Vista",
+            channel="whatsapp",
+        ),
         flow=OrchestratorFlow.TRIAGE,
         exclude_message_id=staff_msg.id,
     )
@@ -302,8 +311,9 @@ async def test_triage_continuation_in_november_reconstructs_october_receipt_from
     assert persisted_agent_msg.flow == ChatMessageFlow.TRIAGE.value
     assert persisted_agent_msg.reference_received_at is not None
     assert to_pernambuco_date(persisted_agent_msg.reference_received_at) == date(2026, 10, 28)
-    assert persisted_agent_msg.source_id == "PED-2026-003"
     assert prepared.triage is not None
+    assert prepared.triage.summary == "Pedido de 25 kg de queijo coalho para entrega em 29/10/2026."
+    assert prepared.triage.extracted_data.items[0].quantity == 25
     assert "Queijo coalho: 25 kg" in persisted_agent_msg.content
     assert "Prazo: 29/10/2026" in persisted_agent_msg.content
 
@@ -630,3 +640,173 @@ async def test_failed_citation_or_response_persistence_rolls_back_preserving_pri
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_messages_are_rejected_across_chat_and_solicitation_endpoints(
+    db_session: AsyncSession,
+    api_client: httpx.AsyncClient,
+) -> None:
+    # Ponto 1 da revisão: impede o cadastro de mensagens compostas apenas por espaços
+    # tanto no chat livre quanto no chat da triagem e no repositório, garantindo que o
+    # histórico persistido seja sempre reconstruível como ConversationTurn.
+    _, headers = await _create_user_and_token(db_session)
+
+    created_session = await api_client.post("/chat/sessions", headers=headers)
+    assert created_session.status_code == 201
+    session_id = UUID(created_session.json()["id"])
+
+    for blank in ("", " ", "   \n\t  "):
+        chat_resp = await api_client.post(
+            f"/chat/sessions/{session_id}/messages",
+            headers=headers,
+            json={"content": blank},
+        )
+        assert chat_resp.status_code == 422
+
+    # Mensagem válida com espaços nas pontas é normalizada e reconstruível sem erro
+    ok_resp = await api_client.post(
+        f"/chat/sessions/{session_id}/messages",
+        headers=headers,
+        json={"content": "   Qual o prazo da política comercial?   "},
+    )
+    assert ok_resp.status_code == 201
+    assert ok_resp.json()["content"] == "Qual o prazo da política comercial?"
+
+    history = await AgentIntegrationService(ChatRepository(db_session)).load_session_history(
+        session_id
+    )
+    assert len(history) == 1
+    assert history[0].content == "Qual o prazo da política comercial?"
+
+    # Também rejeita mensagens compostas só por espaços no chat da triagem e no repositório
+    solicitation_service = SolicitationService(SolicitationRepository(db_session))
+    solicitation = await solicitation_service.create_from_analysis(
+        SolicitationCreate.model_validate(
+            {
+                "input": {
+                    "message_text": "Pedido de teste para validação de espaços.",
+                    "received_at": "2026-10-28T09:00:00-03:00",
+                    "source_id": "PED-BLANK-1",
+                },
+                "analysis": {
+                    "summary": "Pedido de teste.",
+                    "request_type": "pedido",
+                    "urgency": "normal",
+                    "urgency_reason": "Prazo regular.",
+                    "received_date_reference": "2026-10-28",
+                    "extracted_data": {},
+                    "pending_items": [],
+                },
+            }
+        )
+    )
+    triage_resp = await api_client.post(
+        f"/solicitations/{solicitation.id}/messages",
+        headers=headers,
+        json={"content": "   \t  "},
+    )
+    assert triage_resp.status_code == 422
+
+    with pytest.raises(ValueError, match="must not be blank"):
+        await ChatRepository(db_session).add_message(session_id, "   \n  ")
+
+
+@pytest.mark.asyncio
+async def test_persist_orchestrator_response_rejects_mismatched_sessions_without_persisting(
+    db_session: AsyncSession,
+) -> None:
+    # Ponto 2 da revisão: original_request, orchestrator_response e session_id devem
+    # corresponder à mesma sessão; qualquer combinação incompatível é rejeitada sem gravar dados.
+    user_id, _ = await _create_user_and_token(db_session)
+    chat_repo = ChatRepository(db_session)
+    session_a = await chat_repo.create_session(user_id)
+    session_b = await chat_repo.create_session(user_id)
+
+    doc = Document(
+        original_filename="politica-comercial-2026.txt",
+        storage_key=f"test-mismatch-{uuid4().hex}",
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    chunk = DocumentChunk(
+        document_id=doc.id,
+        content="Prazo de 48 horas úteis.",
+    )
+    db_session.add(chunk)
+    await db_session.commit()
+
+    session_a_id = session_a.id
+    session_b_id = session_b.id
+    source = ConsultationSourceItem(
+        source_id=str(chunk.id),
+        document_id=str(doc.id),
+        document_name="politica-comercial-2026.txt",
+        content=chunk.content,
+    )
+
+    request_a = OrchestratorRequest(
+        session_id=session_a_id,  # type: ignore[arg-type]
+        message_text="Qual o prazo na sessão A?",
+        sources=[source],
+    )
+    request_b = OrchestratorRequest(
+        session_id=session_b_id,  # type: ignore[arg-type]
+        message_text="Qual o prazo na sessão B?",
+        sources=[source],
+    )
+    response_a = OrchestratorResponse(
+        session_id=session_a_id,  # type: ignore[arg-type]
+        selected_flow="consultation",
+        selected_agent="consultation_agent",
+        result=ConsultationResponse(
+            answer="Prazo de 48 horas úteis.",
+            reference_date_used="2026-11-19",
+            source_ids=[str(chunk.id)],
+            has_sufficient_data=True,
+        ),
+    )
+    response_b = OrchestratorResponse(
+        session_id=session_b_id,  # type: ignore[arg-type]
+        selected_flow="consultation",
+        selected_agent="consultation_agent",
+        result=ConsultationResponse(
+            answer="Prazo de 48 horas úteis.",
+            reference_date_used="2026-11-19",
+            source_ids=[str(chunk.id)],
+            has_sufficient_data=True,
+        ),
+    )
+
+    integration = AgentIntegrationService(ChatRepository(db_session))
+
+    # Combinação 1: original_request de B com response de A e destino A
+    with pytest.raises(SessionMessageMismatchError):
+        await integration.persist_orchestrator_response(
+            session_a_id,
+            response_a,
+            original_request=request_b,
+        )
+
+    # Combinação 2: response de B com original_request de A e destino A
+    with pytest.raises(SessionMessageMismatchError):
+        await integration.persist_orchestrator_response(
+            session_a_id,
+            response_b,
+            original_request=request_a,
+        )
+
+    # Combinação 3: destino B com original_request e response de A
+    with pytest.raises(SessionMessageMismatchError):
+        await integration.persist_orchestrator_response(
+            session_b_id,
+            response_a,
+            original_request=request_a,
+        )
+
+    assert await ChatRepository(db_session).list_messages(session_a_id) == []
+    assert await ChatRepository(db_session).list_messages(session_b_id) == []
+    citation_count = await db_session.scalar(
+        select(func.count()).select_from(Citation)
+    )
+    assert citation_count == 0

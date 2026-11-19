@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -55,8 +54,6 @@ class SolicitationRepository:
         role: ChatMessageRole = ChatMessageRole.USER,
         flow: ChatMessageFlow | str | None = None,
         reference_received_at: datetime | date | str | None = None,
-        source_id: UUID | str | None = None,
-        context_metadata: dict[str, Any] | None = None,
     ) -> ChatMessage:
         return await self.chat_repository.add_message(
             session_id,
@@ -64,8 +61,6 @@ class SolicitationRepository:
             role=role,
             flow=flow,
             reference_received_at=reference_received_at,
-            source_id=source_id,
-            context_metadata=context_metadata,
         )
 
     async def list_messages(self, session_id: UUID) -> list[ChatMessage]:

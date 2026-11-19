@@ -30,14 +30,6 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    op.add_column(
-        "chat_messages",
-        sa.Column("source_id", sa.String(length=255), nullable=True),
-    )
-    op.add_column(
-        "chat_messages",
-        sa.Column("context_metadata", sa.JSON(), nullable=True),
-    )
     op.create_check_constraint(
         "ck_chat_messages_flow",
         "chat_messages",
@@ -51,7 +43,5 @@ def downgrade() -> None:
         "chat_messages",
         type_="check",
     )
-    op.drop_column("chat_messages", "context_metadata")
-    op.drop_column("chat_messages", "source_id")
     op.drop_column("chat_messages", "reference_received_at")
     op.drop_column("chat_messages", "flow")

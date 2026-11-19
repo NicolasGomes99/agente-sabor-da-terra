@@ -58,6 +58,22 @@ def _parse_optional_uuid(value: str | UUID | None) -> UUID | None:
         return None
 
 
+def _parse_required_session_uuid(
+    value: str | UUID,
+    *,
+    field_name: str,
+    expected_session_id: UUID | None = None,
+) -> UUID:
+    parsed = _parse_optional_uuid(value)
+    if parsed is None:
+        raise ValueError(f"{field_name} must be a valid UUID, got {value!r}.")
+    if expected_session_id is not None and parsed != expected_session_id:
+        raise SessionMessageMismatchError(
+            f"{field_name} targets session {parsed}, expected session {expected_session_id}."
+        )
+    return parsed
+
+
 def _dedupe_sources(
     *collections: Sequence[ConsultationSourceItem] | None,
 ) -> list[ConsultationSourceItem]:
@@ -103,7 +119,6 @@ def chat_message_to_conversation_turn(message: ChatMessage) -> ConversationTurn:
         content=message.content,
         flow=flow_value,
         received_at=message.reference_received_at,
-        source_id=message.source_id,
     )
 
 
@@ -144,7 +159,7 @@ def extract_triage_context_from_messages(
     *,
     session_id: UUID | None = None,
 ) -> PreparedTriageContext:
-    """Recupera metadados da triagem a partir das mensagens persistidas sem presumir campos nulos."""
+    """Recupera a referência temporal da triagem persistida em chat_messages sem presumir nulos."""
     ordered = _sort_messages_for_history(messages)
     for msg in ordered:
         if session_id is not None and msg.session_id != session_id:
@@ -154,42 +169,16 @@ def extract_triage_context_from_messages(
             )
 
     original_received_at: datetime | None = None
-    source_id: str | None = None
     for msg in reversed(ordered):
-        if msg.flow == ChatMessageFlow.TRIAGE.value:
-            if original_received_at is None and msg.reference_received_at is not None:
-                original_received_at = msg.reference_received_at
-            if source_id is None and msg.source_id:
-                source_id = msg.source_id
-            if original_received_at is not None and source_id is not None:
-                break
-
-    sender: str | None = None
-    buyer_name: str | None = None
-    channel: str | None = None
-    for msg in reversed(ordered):
-        meta = msg.context_metadata
-        if not isinstance(meta, dict):
-            continue
-        if sender is None and isinstance(meta.get("sender"), str) and meta["sender"].strip():
-            sender = meta["sender"].strip()
         if (
-            buyer_name is None
-            and isinstance(meta.get("buyer_name"), str)
-            and meta["buyer_name"].strip()
+            msg.flow == ChatMessageFlow.TRIAGE.value
+            and msg.reference_received_at is not None
         ):
-            buyer_name = meta["buyer_name"].strip()
-        if channel is None and isinstance(meta.get("channel"), str) and meta["channel"].strip():
-            channel = meta["channel"].strip()
-        if sender is not None and buyer_name is not None and channel is not None:
+            original_received_at = msg.reference_received_at
             break
 
     return PreparedTriageContext(
         original_received_at=original_received_at,
-        source_id=source_id,
-        sender=sender,
-        buyer_name=buyer_name,
-        channel=channel,
     )
 
 
@@ -360,10 +349,6 @@ def prepare_triage_chat_request(
         if interaction_at is not None
         else datetime.now(PERNAMBUCO_TIMEZONE)
     )
-    resolved_source_id = explicit.source_id or recovered_context.source_id
-    resolved_sender = explicit.sender or recovered_context.sender
-    resolved_buyer = explicit.buyer_name or recovered_context.buyer_name
-    resolved_channel = explicit.channel or recovered_context.channel
 
     is_new_triage, resolved_flow = _resolve_triage_mode(
         explicit_flow=flow,
@@ -378,10 +363,10 @@ def prepare_triage_chat_request(
         received_at=resolved_interaction_at,
         message_received_at=original_received,
         is_new_triage_message=is_new_triage,
-        sender=resolved_sender,
-        buyer_name=resolved_buyer,
-        channel=resolved_channel,
-        source_id=resolved_source_id,
+        sender=explicit.sender,
+        buyer_name=explicit.buyer_name,
+        channel=explicit.channel,
+        source_id=explicit.source_id,
         sources=list(sources),
         financial_records=(
             list(financial_records) if financial_records is not None else None
@@ -494,11 +479,15 @@ def convert_orchestrator_response(
     original_request: OrchestratorRequest | None = None,
 ) -> AgentPreparedResponse:
     """Converte OrchestratorResponse para o contrato unificado da aplicação."""
-    session_uuid = _parse_optional_uuid(orchestrator_response.session_id)
-    if session_uuid is None:
-        raise ValueError(
-            f"OrchestratorResponse.session_id must be a valid UUID, got "
-            f"{orchestrator_response.session_id!r}."
+    session_uuid = _parse_required_session_uuid(
+        orchestrator_response.session_id,
+        field_name="OrchestratorResponse.session_id",
+    )
+    if original_request is not None:
+        _parse_required_session_uuid(
+            original_request.session_id,
+            field_name="OrchestratorRequest.session_id",
+            expected_session_id=session_uuid,
         )
 
     effective_sources = _dedupe_sources(
@@ -507,10 +496,6 @@ def convert_orchestrator_response(
         original_request.financial_records if original_request is not None else None,
     )
     provided_source_ids = [src.source_id for src in effective_sources]
-
-    source_id = original_request.source_id if original_request is not None else None
-    if source_id is None and orchestrator_response.session_history:
-        source_id = orchestrator_response.session_history[-1].source_id
 
     if isinstance(orchestrator_response.result, TriageAnalysis):
         if orchestrator_response.selected_flow != "triage":
@@ -529,15 +514,11 @@ def convert_orchestrator_response(
             selected_agent="triage_agent",
             content=triage_payload.content,
             reference_received_at=ref_ts,
-            source_id=source_id,
             citation_chunk_ids=[],
             provided_source_ids=provided_source_ids,
             rejected_source_ids=[],
             triage=triage_payload,
             consultation=None,
-            context_metadata={
-                "triage_analysis": orchestrator_response.result.model_dump(mode="json"),
-            },
         )
 
     if orchestrator_response.selected_flow != "consultation":
@@ -558,23 +539,11 @@ def convert_orchestrator_response(
         selected_agent="consultation_agent",
         content=consultation_payload.content,
         reference_received_at=ref_ts,
-        source_id=source_id,
         citation_chunk_ids=list(consultation_payload.citation_chunk_ids),
         provided_source_ids=provided_source_ids,
         rejected_source_ids=list(consultation_payload.rejected_source_ids),
         triage=None,
         consultation=consultation_payload,
-        context_metadata={
-            "consultation": {
-                "reference_date_used": consultation_payload.reference_date_used,
-                "has_sufficient_data": consultation_payload.has_sufficient_data,
-                "source_ids": list(consultation_payload.source_ids),
-                "gaps_and_divergences": [
-                    g.model_dump(mode="json")
-                    for g in consultation_payload.gaps_and_divergences
-                ],
-            }
-        },
     )
 
 
@@ -844,8 +813,6 @@ class AgentIntegrationService:
                     chunk_ids=filtered_chunk_ids,
                     flow=prepared.selected_flow,
                     reference_received_at=prepared.reference_received_at,
-                    source_id=prepared.source_id,
-                    context_metadata=prepared.context_metadata or None,
                 )
 
         try:
@@ -856,8 +823,6 @@ class AgentIntegrationService:
                 chunk_ids=filtered_chunk_ids,
                 flow=prepared.selected_flow,
                 reference_received_at=prepared.reference_received_at,
-                source_id=prepared.source_id,
-                context_metadata=prepared.context_metadata or None,
             )
             await self.chat_repository.session.commit()
         except Exception:
@@ -875,6 +840,18 @@ class AgentIntegrationService:
         commit: bool = True,
     ) -> tuple[ChatMessage, AgentPreparedResponse]:
         """Converte OrchestratorResponse e persiste resposta + citações atomicamente."""
+        _parse_required_session_uuid(
+            orchestrator_response.session_id,
+            field_name="OrchestratorResponse.session_id",
+            expected_session_id=session_id,
+        )
+        if original_request is not None:
+            _parse_required_session_uuid(
+                original_request.session_id,
+                field_name="OrchestratorRequest.session_id",
+                expected_session_id=session_id,
+            )
+
         effective_sources = _dedupe_sources(
             provided_sources,
             original_request.sources if original_request is not None else None,

@@ -74,8 +74,10 @@ Para reconstruir o contexto da conversa a partir do PostgreSQL sem depender do e
 | --- | --- | --- |
 | `flow` | `VARCHAR(32)` (`'triage'` \| `'consultation'` \| `NULL`) | Fluxo executado no turno. |
 | `reference_received_at` | `TIMESTAMPTZ` (`NULL`) | Referência temporal do turno (data original de recebimento na triagem ou data de referência da consulta). |
-| `source_id` | `VARCHAR(255)` (`NULL`) | Identificador externo da mensagem original na triagem (ex.: `PED-2026-003`). |
-| `context_metadata` | `JSON` (`NULL`) | Metadados estruturados auxiliares (`sender`/`channel` na origem da triagem; resumo estruturado de `TriageAnalysis` ou `ConsultationResponse`). |
+
+- Os metadados originais de recebimento (`source_id`, `sender`, `buyer_name`, `channel`) pertencem à modelagem de `EntradaRecebida` (`#39`) e são repassados por parâmetro via `PreparedTriageContext` (sem depender da conclusão da `#39`).
+- As citações possuem persistência própria na tabela `citations`, enquanto os retornos estruturados completos (`TriageAnalysis` e `ConsultationResponse`) são preservados em memória no envelope `AgentPreparedResponse` para consumo pelos serviços da `#51`.
+- Mensagens vazias ou compostas apenas por espaços são rejeitadas tanto em `MessageCreate` quanto em `ChatRepository.add_message`, mantendo alinhamento com `ConversationTurn`.
 
 ### 2. Contrato de fornecimento de fontes documentais (RAG `#52`)
 
@@ -153,15 +155,21 @@ request, retrieved = await integration.prepare_triage_chat_input(
     session_id=solicitation.session_id,
     message_text=clarification_text,
     interaction_at="2026-11-19T14:00:00-03:00",
-    # Opcional: se já persistido na triagem inicial, a data original (ex.: 28/10/2026)
-    # é recuperada automaticamente do PostgreSQL; também pode ser informada explicitamente
-    # via PreparedTriageContext (ex.: a partir de EntradaRecebida da #39).
-    triage_context=PreparedTriageContext(solicitation_id=solicitation.id),
+    # A data original (ex.: 28/10/2026) é recuperada automaticamente de
+    # chat_messages.reference_received_at; metadados de origem (ex.: EntradaRecebida da #39)
+    # são informados por parâmetro via PreparedTriageContext.
+    triage_context=PreparedTriageContext(
+        solicitation_id=solicitation.id,
+        source_id="PED-2026-003",
+        sender="Supermercado Boa Vista",
+        channel="whatsapp",
+    ),
     exclude_message_id=user_message.id,
 )
 # request.message_received_at preserva 2026-10-28; request.received_at registra 2026-11-19.
 ```
 
+- `convert_orchestrator_response()` e `persist_orchestrator_response()` validam que `original_request`, `orchestrator_response` e `session_id` pertencem à mesma sessão antes de autorizar fontes ou persistir dados.
 - Para compor a persistência da resposta do assistente com a atualização do cartão de `Solicitation` na mesma transação (prevista na `#51`), passe `commit=False` a `persist_agent_response()` / `persist_orchestrator_response()`.
 - Citações cuja fonte (`chunk_id`) não tenha sido disponibilizada ao agente na consulta são descartadas em `rejected_source_ids` e nunca são persistidas em `citations`.
 - Qualquer falha na gravação da mensagem ou de uma citação desfaz a transação, preservando intacto o histórico anterior.

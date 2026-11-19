@@ -201,6 +201,14 @@ class AgentTriageResponsePayload(BaseModel):
     requires_clarification: bool = False
     analysis: TriageAnalysis
 
+    @field_validator("content")
+    @classmethod
+    def _validate_content_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank.")
+        return stripped
+
 
 class AgentConsultationResponsePayload(BaseModel):
     """Conversão de ConsultationResponse com citações restritas às fontes disponibilizadas."""
@@ -232,6 +240,14 @@ class AgentConsultationResponsePayload(BaseModel):
     )
     response: ConsultationResponse
 
+    @field_validator("content")
+    @classmethod
+    def _validate_content_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank.")
+        return stripped
+
 
 class AgentPreparedResponse(BaseModel):
     """Envelope unificado da resposta tratada do orquestrador pronta para persistência."""
@@ -241,10 +257,16 @@ class AgentPreparedResponse(BaseModel):
     selected_agent: Literal["triage_agent", "consultation_agent"]
     content: str = Field(min_length=1)
     reference_received_at: datetime | None = None
-    source_id: str | None = None
     citation_chunk_ids: list[UUID] = Field(default_factory=list)
     provided_source_ids: list[str] = Field(default_factory=list)
     rejected_source_ids: list[str] = Field(default_factory=list)
     triage: AgentTriageResponsePayload | None = None
     consultation: AgentConsultationResponsePayload | None = None
-    context_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content")
+    @classmethod
+    def _validate_content_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank.")
+        return stripped

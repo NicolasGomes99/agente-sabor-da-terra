@@ -1,10 +1,9 @@
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
-    JSON,
     CheckConstraint,
     DateTime,
     Enum,
@@ -78,16 +77,6 @@ class ChatMessage(Base):
 
     reference_received_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        nullable=True,
-    )
-
-    source_id: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-    )
-
-    context_metadata: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON,
         nullable=True,
     )
 

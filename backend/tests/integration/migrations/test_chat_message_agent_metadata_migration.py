@@ -139,17 +139,17 @@ def test_chat_message_agent_metadata_migration_preserves_legacy_rows(
 
         command.upgrade(config, AGENT_METADATA_REVISION)
         columns = asyncio.run(_read_chat_message_columns(url))
-        for col_name in ("flow", "reference_received_at", "source_id", "context_metadata"):
+        for col_name in ("flow", "reference_received_at"):
             assert col_name in columns
             assert columns[col_name]["nullable"] is True
+        assert "source_id" not in columns
+        assert "context_metadata" not in columns
 
         upgraded_row = asyncio.run(_read_message_row(url, legacy_msg_id))
         assert upgraded_row["content"] == before_row["content"]
         assert upgraded_row["position"] == before_row["position"]
         assert upgraded_row["flow"] is None
         assert upgraded_row["reference_received_at"] is None
-        assert upgraded_row["source_id"] is None
-        assert upgraded_row["context_metadata"] is None
 
         # Valores válidos aceitos e valor inválido rejeitado pela check constraint
         asyncio.run(_insert_message_with_flow(url, session_id, 2, "triage"))
@@ -159,7 +159,7 @@ def test_chat_message_agent_metadata_migration_preserves_legacy_rows(
 
         command.downgrade(config, PARENT_REVISION)
         downgraded_columns = asyncio.run(_read_chat_message_columns(url))
-        for col_name in ("flow", "reference_received_at", "source_id", "context_metadata"):
+        for col_name in ("flow", "reference_received_at"):
             assert col_name not in downgraded_columns
         downgraded_row = asyncio.run(_read_message_row(url, legacy_msg_id))
         assert downgraded_row == before_row
