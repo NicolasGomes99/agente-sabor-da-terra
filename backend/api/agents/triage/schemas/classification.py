@@ -77,24 +77,14 @@ def _collect_deadlines(
     document_availability_date_start: date | None,
     deadlines: Sequence[TriageDeadline] | None,
 ) -> list[TriageDeadline]:
-    collected: list[TriageDeadline] = []
-    for item in deadlines or []:
-        if item.action == DeadlineAction.DELIVERY and has_date_conflict and not item.has_conflict:
-            collected.append(item.model_copy(update={"has_conflict": True}))
-        else:
-            collected.append(item)
-
+    collected: list[TriageDeadline] = list(deadlines or [])
     present_actions = {d.action for d in collected}
 
-    if (
-        (delivery_date_start is not None or has_date_conflict)
-        and DeadlineAction.DELIVERY not in present_actions
-    ):
+    if delivery_date_start is not None and DeadlineAction.DELIVERY not in present_actions:
         collected.append(
             TriageDeadline(
                 action=DeadlineAction.DELIVERY,
-                date_start=delivery_date_start.isoformat() if delivery_date_start else None,
-                has_conflict=has_date_conflict,
+                date_start=delivery_date_start.isoformat(),
             )
         )
     if response_deadline is not None and DeadlineAction.RESPONSE not in present_actions:
@@ -114,6 +104,19 @@ def _collect_deadlines(
                 date_start=document_availability_date_start.isoformat(),
             )
         )
+
+    if has_date_conflict and not any(d.has_conflict for d in collected):
+        if len(collected) == 1:
+            collected[0] = collected[0].model_copy(update={"has_conflict": True})
+        elif len(collected) == 0:
+            collected.append(
+                TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start=None,
+                    has_conflict=True,
+                )
+            )
+
     return collected
 
 
