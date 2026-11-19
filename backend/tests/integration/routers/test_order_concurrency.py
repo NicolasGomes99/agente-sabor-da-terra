@@ -2,8 +2,8 @@
 import asyncio
 from collections.abc import AsyncIterator
 from copy import deepcopy
-from uuid import uuid4
 from decimal import Decimal
+from uuid import uuid4
 
 import httpx
 import pytest
