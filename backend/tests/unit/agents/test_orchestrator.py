@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -6,9 +7,11 @@ import pytest
 from google.genai import types
 
 from api.agents import (
+    ROUTER_OUTPUT_KEY,
     IntentRouteDecision,
     OrchestratorFlow,
     OrchestratorRequest,
+    OrchestratorResponse,
     OrchestratorSessionStore,
     create_intent_router_agent,
     create_orchestrator_agent,
@@ -22,7 +25,7 @@ from api.agents.consultation import (
     ConsultationResponse,
     ConsultationSourceItem,
 )
-from api.agents.triage import TRIAGE_OUTPUT_KEY, TriageAnalysis
+from api.agents.triage import TRIAGE_OUTPUT_KEY, TriageAnalysis, UrgencyLevel
 
 
 class FakeSessionService:
@@ -53,12 +56,17 @@ class FakeSpecialistRunner:
     def __init__(
         self,
         state_key: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        *,
+        error: Exception | None = None,
+        store_in_state: bool = True,
     ) -> None:
         self.app_name = f"fake_{state_key}"
         self.session_service = FakeSessionService()
         self._state_key = state_key
-        self._payload = payload
+        self._payload = payload or {}
+        self._error = error
+        self._store_in_state = store_in_state
         self.received_prompts: list[str] = []
 
     async def run_async(
@@ -71,10 +79,12 @@ class FakeSpecialistRunner:
         prompt_text = new_message.parts[0].text
         self.received_prompts.append(prompt_text)
 
-        import json
+        if self._error is not None:
+            raise self._error
 
         session = self.session_service.sessions[session_id]
-        session.state[self._state_key] = self._payload
+        if self._store_in_state:
+            session.state[self._state_key] = self._payload
         yield SimpleNamespace(
             content=types.Content(
                 role="model",
@@ -95,6 +105,64 @@ def test_root_agent_exposes_triage_and_consultation_sub_agents() -> None:
     assert router_agent.output_schema is IntentRouteDecision
 
 
+def test_split_modules_preserve_root_agent_and_documented_entrypoint() -> None:
+    # Critério 5 da #37 (Orquestração): root_agent continua acessível via api.agents.agent
+    # e a entrada escolhida (orchestrate_request) pode ser importada pelo caminho documentado
+    from api.agents import orchestrate_request as entrypoint_from_package
+    from api.agents.agent import (
+        APPLICATION_ENTRYPOINT,
+    )
+    from api.agents.agent import (
+        orchestrate_request as entrypoint_from_agent_module,
+    )
+    from api.agents.agent import (
+        root_agent as root_from_agent_module,
+    )
+    from api.agents.routing import (
+        classify_intent_with_router_runner,
+        create_default_router_runner,
+    )
+    from api.agents.routing import (
+        infer_free_chat_flow as infer_from_routing,
+    )
+    from api.agents.schemas import (
+        ConversationTurn,
+    )
+    from api.agents.schemas import (
+        IntentRouteDecision as DecisionFromSchemas,
+    )
+    from api.agents.schemas import (
+        OrchestratorFlow as FlowFromSchemas,
+    )
+    from api.agents.schemas import (
+        OrchestratorRequest as RequestFromSchemas,
+    )
+    from api.agents.schemas import (
+        OrchestratorResponse as ResponseFromSchemas,
+    )
+    from api.agents.session import (
+        OrchestratorSessionStore as StoreFromSession,
+    )
+    from api.agents.session import (
+        format_history_context as format_from_session,
+    )
+
+    assert root_from_agent_module is root_agent
+    assert entrypoint_from_agent_module is orchestrate_request
+    assert entrypoint_from_package is orchestrate_request
+    assert APPLICATION_ENTRYPOINT == "api.agents.agent:orchestrate_request"
+    assert DecisionFromSchemas is IntentRouteDecision
+    assert FlowFromSchemas is OrchestratorFlow
+    assert RequestFromSchemas is OrchestratorRequest
+    assert ResponseFromSchemas is OrchestratorResponse
+    assert StoreFromSession is OrchestratorSessionStore
+    assert format_from_session is format_history_context
+    assert infer_from_routing is infer_free_chat_flow
+    assert callable(classify_intent_with_router_runner)
+    assert callable(create_default_router_runner)
+    assert ConversationTurn(role="user", content="Teste").role == "user"
+
+
 def test_infer_free_chat_flow_routes_certification_and_order_messages() -> None:
     cert_req = OrchestratorRequest(
         session_id="sess-1",
@@ -113,12 +181,33 @@ def test_infer_free_chat_flow_routes_certification_and_order_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_free_chat_certification_question_routes_to_consultation_agent() -> None:
-    # Critério 1 da #16: pergunta sobre certificação no chat livre vai para o agente da #14
+async def test_simulated_classifier_routes_order_with_organic_cert_to_triage_and_validity_question_to_consultation() -> None:
+    # Critérios 1 e 6 da #37 (Orquestração): com o classificador simulado, um pedido para
+    # analisar uma mensagem de compra que menciona certificado orgânico segue para triagem,
+    # e uma pergunta sobre a validade do certificado segue para consulta documental
+    triage_payload = {
+        "summary": "Pedido de mel silvestre exigindo certificado orgânico vigente.",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "normal",
+        "urgency_reason": "Entrega em 05/11/2026, após o dia seguinte ao recebimento.",
+        "received_date_reference": "2026-10-30",
+        "extracted_data": {
+            "buyer_name": "Empório Verde",
+            "delivery_date_start": "2026-11-05",
+            "items": [{"product": "Mel silvestre", "quantity": 20, "unit": "kg"}],
+            "requirements": [
+                {"description": "Certificado orgânico vigente", "source": "mensagem"}
+            ],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
     consultation_payload = {
         "answer": (
-            "Considerando a data de referência 30/10/2026, José Antônio dos Santos (P002) "
-            "possui certificação orgânica vigente (ORG-PE-2025-003198) até 20/03/2027."
+            "Considerando a data de referência 2026-10-30, o certificado "
+            "ORG-PE-2025-003198 de José Antônio dos Santos (P002) está válido até 20/03/2027."
         ),
         "reference_date_used": "2026-10-30",
         "source_ids": ["chunk-cert-p002"],
@@ -126,16 +215,54 @@ async def test_free_chat_certification_question_routes_to_consultation_agent() -
         "gaps_and_divergences": [],
         "has_sufficient_data": True,
     }
+
+    triage_router = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {
+            "target_flow": "triage",
+            "reason": "Solicitação de análise de mensagem de compra recebida.",
+        },
+    )
+    triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload)
     consultation_runner = FakeSpecialistRunner(
         CONSULTATION_OUTPUT_KEY,
         consultation_payload,
     )
-    triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, {})
 
-    request = OrchestratorRequest(
-        session_id="chat-cert-01",
-        message_text="A certificação orgânica de José Antônio para mel está vigente?",
+    order_with_cert_request = OrchestratorRequest(
+        session_id="chat-order-with-cert",
         received_at="2026-10-30",
+        message_text=(
+            "Por favor, processe a mensagem de compra: 'Bom dia, queremos comprar "
+            "20kg de mel silvestre para entrega em 05/11/2026 com certificado orgânico.'"
+        ),
+    )
+    triage_resp = await orchestrate_request(
+        order_with_cert_request,
+        router_runner=triage_router,
+        triage_runner=triage_runner,
+        consultation_runner=consultation_runner,
+    )
+
+    assert isinstance(triage_resp, OrchestratorResponse)
+    assert triage_resp.selected_flow == "triage"
+    assert triage_resp.selected_agent == "triage_agent"
+    assert isinstance(triage_resp.result, TriageAnalysis)
+    assert len(triage_router.received_prompts) == 1
+    assert len(triage_runner.received_prompts) == 1
+    assert len(consultation_runner.received_prompts) == 0
+
+    consult_router = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {
+            "target_flow": "consultation",
+            "reason": "Pergunta direta sobre validade de certificado orgânico.",
+        },
+    )
+    validity_question_request = OrchestratorRequest(
+        session_id="chat-cert-validity",
+        received_at="2026-10-30",
+        message_text="Qual é a validade do certificado orgânico de José Antônio para mel?",
         sources=[
             ConsultationSourceItem(
                 source_id="chunk-cert-p002",
@@ -146,73 +273,144 @@ async def test_free_chat_certification_question_routes_to_consultation_agent() -
             )
         ],
     )
-
-    response = await orchestrate_request(
-        request,
+    consult_resp = await orchestrate_request(
+        validity_question_request,
+        router_runner=consult_router,
         triage_runner=triage_runner,
         consultation_runner=consultation_runner,
     )
 
-    assert response.selected_flow == "consultation"
-    assert response.selected_agent == "consultation_agent"
-    assert isinstance(response.result, ConsultationResponse)
-    assert response.result.source_ids == ["chunk-cert-p002"]
-    assert len(triage_runner.received_prompts) == 0
+    assert isinstance(consult_resp, OrchestratorResponse)
+    assert consult_resp.selected_flow == "consultation"
+    assert consult_resp.selected_agent == "consultation_agent"
+    assert isinstance(consult_resp.result, ConsultationResponse)
+    assert consult_resp.result.source_ids == ["chunk-cert-p002"]
+    assert len(consult_router.received_prompts) == 1
     assert len(consultation_runner.received_prompts) == 1
 
 
 @pytest.mark.asyncio
-async def test_free_chat_order_analysis_routes_to_triage_agent() -> None:
-    # Critério 2 da #16: pedir no chat livre a análise de uma mensagem de pedido
-    # retorna o resultado do agente de triagem da #13
+async def test_default_flow_uses_semantic_classifier_and_falls_back_to_heuristics_on_failure_or_invalid_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Critério 2 da #37 (Orquestração): confirma que o fluxo padrão (sem router_runner
+    # injetado) usa o classificador semântico e recorre à heurística quando a classificação
+    # falha ou devolve uma decisão inválida
+    import api.agents.routing as routing_module
+
     triage_payload = {
-        "summary": "Pedido de 10 kg de queijo coalho e 5 kg de manteiga para sábado (31/10/2026).",
+        "summary": "Pedido de 10 kg de queijo coalho para sábado (31/10/2026).",
         "request_type": "pedido",
         "additional_intents": [],
         "declared_urgency": False,
         "urgency": "normal",
-        "urgency_reason": "Entrega prevista para 31/10/2026, após o dia seguinte ao recebimento.",
+        "urgency_reason": "Entrega prevista para 31/10/2026.",
         "received_date_reference": "2026-10-28",
         "extracted_data": {
-            "buyer_name": "Dona Cremilda - Lanchonete da Feira",
             "delivery_date_start": "2026-10-31",
-            "items": [
-                {"product": "Queijo coalho", "quantity": 10, "unit": "kg"},
-                {"product": "Manteiga", "quantity": 5, "unit": "kg"},
-            ],
+            "items": [{"product": "Queijo coalho", "quantity": 10, "unit": "kg"}],
         },
         "pending_items": [],
         "requires_clarification": False,
     }
-    triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload)
-    consultation_runner = FakeSpecialistRunner(CONSULTATION_OUTPUT_KEY, {})
+    consultation_payload = {
+        "answer": "Considerando 2026-10-30, o certificado ORG-PE-2025-003198 está vigente.",
+        "reference_date_used": "2026-10-30",
+        "source_ids": ["chunk-cert-p002"],
+        "cited_sources": [],
+        "gaps_and_divergences": [],
+        "has_sufficient_data": True,
+    }
 
-    request = OrchestratorRequest(
-        session_id="chat-triage-01",
-        message_text=(
-            "Analise esta mensagem de pedido: lucia minha filha me manda 10kg "
-            "de queijo coalho e 5kg de manteiga pra sabado"
-        ),
-        received_at="2026-10-28T15:40:00",
+    # 1. Fluxo padrão usa o classificador semântico quando router_runner não é injetado
+    default_semantic_router = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {"target_flow": "triage", "reason": "Classificado semanticamente como triagem."},
+    )
+    monkeypatch.setattr(
+        routing_module,
+        "create_default_router_runner",
+        lambda model=None: default_semantic_router,
     )
 
-    response = await orchestrate_request(
-        request,
+    triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload)
+    consultation_runner = FakeSpecialistRunner(
+        CONSULTATION_OUTPUT_KEY,
+        consultation_payload,
+    )
+
+    # Texto com "?" e "certificado" (que pela heurística pura iria para consultation),
+    # provando que o classificador semântico padrão foi usado
+    resp_semantic = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="default-semantic-1",
+            received_at="2026-10-28",
+            message_text="Esta mensagem de comprador pede certificado orgânico para 10kg de queijo?",
+        ),
         triage_runner=triage_runner,
         consultation_runner=consultation_runner,
     )
+    assert resp_semantic.selected_flow == "triage"
+    assert len(default_semantic_router.received_prompts) == 1
 
-    assert response.selected_flow == "triage"
-    assert response.selected_agent == "triage_agent"
-    assert isinstance(response.result, TriageAnalysis)
-    assert response.result.extracted_data.delivery_date_start == "2026-10-31"
-    assert len(consultation_runner.received_prompts) == 0
+    # 2. Quando o classificador semântico lança exceção, recorre à heurística
+    failing_router = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        error=RuntimeError("Falha simulada no modelo do classificador"),
+    )
+    monkeypatch.setattr(
+        routing_module,
+        "create_default_router_runner",
+        lambda model=None: failing_router,
+    )
+
+    resp_fallback_on_error = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="fallback-error-1",
+            received_at="2026-10-30",
+            message_text="A certificação orgânica de José Antônio está vigente?",
+            sources=[
+                ConsultationSourceItem(
+                    source_id="chunk-cert-p002",
+                    document_name="cert_organica_jose_santos_P002.txt",
+                    content="Certificado válido até 20/03/2027.",
+                )
+            ],
+        ),
+        triage_runner=triage_runner,
+        consultation_runner=consultation_runner,
+    )
+    assert resp_fallback_on_error.selected_flow == "consultation"
+    assert len(failing_router.received_prompts) == 1
+
+    # 3. Quando o classificador semântico devolve decisão inválida, recorre à heurística
+    invalid_decision_router = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {"target_flow": "fluxo_inexistente", "reason": "Saída inválida do modelo."},
+    )
+    monkeypatch.setattr(
+        routing_module,
+        "create_default_router_runner",
+        lambda model=None: invalid_decision_router,
+    )
+
+    resp_fallback_on_invalid = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="fallback-invalid-1",
+            received_at="2026-10-28",
+            message_text="Analise esta mensagem de pedido: preciso urgente de 10kg de queijo coalho.",
+        ),
+        triage_runner=triage_runner,
+        consultation_runner=consultation_runner,
+    )
+    assert resp_fallback_on_invalid.selected_flow == "triage"
+    assert len(invalid_decision_router.received_prompts) == 1
 
 
 @pytest.mark.asyncio
-async def test_queue_task_with_explicit_triage_flow_executes_triage_directly() -> None:
-    # Critério 3 da #16: tarefa da fila com fluxo de triagem indicado pelo backend
-    # executa esse fluxo mesmo que o texto mencione 'certificação' ou 'lote'
+async def test_explicit_backend_flow_executes_specialist_without_calling_classifier() -> None:
+    # Critério 3 da #37 (Orquestração): quando o backend indica o fluxo, o orquestrador
+    # executa o especialista correspondente sem chamar o classificador
     triage_payload = {
         "summary": "Notificação oficial da ADAGRO sobre inspeção sanitária em 11 e 12/11/2026.",
         "request_type": "comunicado",
@@ -231,10 +429,25 @@ async def test_queue_task_with_explicit_triage_flow_executes_triage_directly() -
         "pending_items": [],
         "requires_clarification": True,
     }
+    consultation_payload = {
+        "answer": "Na data de referência 2026-10-30, o lote LOT-2026-0094 registra 300 unidades.",
+        "reference_date_used": "2026-10-30",
+        "source_ids": ["rec-lot-0094"],
+        "cited_sources": [],
+        "gaps_and_divergences": [],
+        "has_sufficient_data": True,
+    }
+    router_runner = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {"target_flow": "consultation", "reason": "Não deveria ser chamado."},
+    )
     triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload)
-    consultation_runner = FakeSpecialistRunner(CONSULTATION_OUTPUT_KEY, {})
+    consultation_runner = FakeSpecialistRunner(
+        CONSULTATION_OUTPUT_KEY,
+        consultation_payload,
+    )
 
-    queue_request = OrchestratorRequest(
+    queue_triage_request = OrchestratorRequest(
         session_id="queue-ped-2026-014",
         flow=OrchestratorFlow.TRIAGE,
         source_id="PED-2026-014",
@@ -245,55 +458,99 @@ async def test_queue_task_with_explicit_triage_flow_executes_triage_directly() -
         ),
     )
 
-    response = await orchestrate_request(
-        queue_request,
+    triage_response = await orchestrate_request(
+        queue_triage_request,
+        router_runner=router_runner,
         triage_runner=triage_runner,
         consultation_runner=consultation_runner,
     )
 
-    assert response.selected_flow == "triage"
-    assert response.selected_agent == "triage_agent"
-    assert isinstance(response.result, TriageAnalysis)
-    assert response.result.request_type.value == "comunicado"
+    assert triage_response.selected_flow == "triage"
+    assert triage_response.selected_agent == "triage_agent"
+    assert isinstance(triage_response.result, TriageAnalysis)
+    assert triage_response.result.request_type.value == "comunicado"
+    assert len(router_runner.received_prompts) == 0
     assert len(consultation_runner.received_prompts) == 0
+
+    explicit_consult_request = OrchestratorRequest(
+        session_id="explicit-consult-01",
+        flow=OrchestratorFlow.CONSULTATION,
+        received_at="2026-10-30",
+        message_text="Preciso urgente saber do lote LOT-2026-0094.",
+        sources=[
+            ConsultationSourceItem(
+                source_id="rec-lot-0094",
+                document_name="lotes.csv",
+                content="LOT-2026-0094: 300 unidades de alface.",
+            )
+        ],
+    )
+
+    consult_response = await orchestrate_request(
+        explicit_consult_request,
+        router_runner=router_runner,
+        triage_runner=triage_runner,
+        consultation_runner=consultation_runner,
+    )
+
+    assert consult_response.selected_flow == "consultation"
+    assert consult_response.selected_agent == "consultation_agent"
+    assert isinstance(consult_response.result, ConsultationResponse)
+    assert len(router_runner.received_prompts) == 0
 
 
 @pytest.mark.asyncio
-async def test_resumed_session_receives_history_and_keeps_sessions_isolated() -> None:
-    # Critério 4 da #16 + RF10: ao retomar uma conversa, o agente recebe o histórico
-    # da sessão aberta, e conversas diferentes mantêm contextos separados
+async def test_resumed_triage_on_2026_10_30_from_2026_10_28_separates_history_and_keeps_2026_10_29_deadline() -> None:
+    # Critério 4 da #37 (Orquestração) + RF10: ao retomar em 30/10/2026 uma conversa
+    # cuja mensagem original foi recebida em 28/10/2026 e dizia “amanhã”, o histórico
+    # chega separado e o prazo original permanece 29/10/2026
     store = OrchestratorSessionStore()
 
     triage_payload_turn1 = {
-        "summary": "Pedido com data conflitante entre sexta-feira (30/10) e 01/11.",
+        "summary": "Pedido de 15 kg de queijo coalho para amanhã (29/10/2026), com ricota condicional.",
         "request_type": "pedido",
         "additional_intents": [],
         "declared_urgency": False,
-        "urgency": "indeterminada",
-        "urgency_reason": "Conflito de data de entrega.",
+        "urgency": "urgente",
+        "urgency_reason": "Entrega prevista para 2026-10-29, no dia seguinte ao recebimento (2026-10-28).",
         "received_date_reference": "2026-10-28",
         "extracted_data": {
             "buyer_name": "Restaurante Raízes",
-            "has_date_conflict": True,
-            "date_conflict_description": "Sexta é 30/10/2026, mas 01/11/2026 é domingo.",
-            "items": [{"product": "Queijo coalho", "quantity": 30, "unit": "kg"}],
+            "delivery_date_start": "2026-10-29",
+            "delivery_reference_raw": "amanhã",
+            "has_date_conflict": False,
+            "items": [
+                {"product": "Queijo coalho", "quantity": 15, "unit": "kg"},
+                {
+                    "product": "Ricota",
+                    "quantity": 5,
+                    "unit": "kg",
+                    "conditional": True,
+                    "condition_text": "se tiver",
+                    "ambiguous_or_aggregate": True,
+                },
+            ],
         },
         "pending_items": [],
         "requires_clarification": True,
     }
     triage_payload_turn2 = {
-        "summary": "Pedido do Restaurante Raízes com entrega esclarecida para 30/10/2026.",
+        "summary": "Pedido de 15 kg de queijo coalho e 5 kg de ricota confirmados para 29/10/2026.",
         "request_type": "pedido",
         "additional_intents": [],
         "declared_urgency": False,
-        "urgency": "normal",
-        "urgency_reason": "Entrega em 30/10/2026, após o dia seguinte ao recebimento (28/10/2026).",
+        "urgency": "urgente",
+        "urgency_reason": "Entrega prevista para 2026-10-29, no dia seguinte ao recebimento (2026-10-28).",
         "received_date_reference": "2026-10-28",
         "extracted_data": {
             "buyer_name": "Restaurante Raízes",
-            "delivery_date_start": "2026-10-30",
+            "delivery_date_start": "2026-10-29",
+            "delivery_reference_raw": "amanhã",
             "has_date_conflict": False,
-            "items": [{"product": "Queijo coalho", "quantity": 30, "unit": "kg"}],
+            "items": [
+                {"product": "Queijo coalho", "quantity": 15, "unit": "kg"},
+                {"product": "Ricota", "quantity": 5, "unit": "kg", "conditional": False},
+            ],
         },
         "pending_items": [],
         "requires_clarification": False,
@@ -313,13 +570,17 @@ async def test_resumed_session_receives_history_and_keeps_sessions_isolated() ->
             session_id="session-A",
             flow=OrchestratorFlow.TRIAGE,
             received_at="2026-10-28T09:15:00",
-            message_text="Preciso pra essa sexta (01/nov): 30kg de queijo coalho.",
+            message_text="Preciso pra amanhã de 15kg de queijo coalho e se tiver 5kg de ricota.",
         ),
         session_store=store,
         triage_runner=triage_runner_1,
     )
 
     # Sessão B independente (consulta documental)
+    consult_router_b = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {"target_flow": "consultation", "reason": "Consulta de lote."},
+    )
     consult_runner_b = FakeSpecialistRunner(
         CONSULTATION_OUTPUT_KEY,
         consultation_payload_other_session,
@@ -338,32 +599,243 @@ async def test_resumed_session_receives_history_and_keeps_sessions_isolated() ->
             ],
         ),
         session_store=store,
+        router_runner=consult_router_b,
         consultation_runner=consult_runner_b,
     )
 
-    # Retoma a Sessão A com uma resposta de esclarecimento curta (sem palavras-chave óbvias):
-    # O orquestrador deve manter o fluxo 'triage' pelo histórico de session-A e passar o histórico
-    # de session-A sem nada da session-B!
+    # Retoma a Sessão A em 30/10/2026: o histórico deve chegar separado de <mensagem_recebida>,
+    # a data de recebimento da mensagem em análise deve permanecer 2026-10-28 e o prazo original
+    # ("amanhã") deve continuar 2026-10-29 com urgência urgente.
+    resume_router_a = FakeSpecialistRunner(
+        ROUTER_OUTPUT_KEY,
+        {"target_flow": "triage", "reason": "Continuação da triagem na sessão A."},
+    )
     triage_runner_2 = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload_turn2)
+    clarification_text = "Confirmamos que há estoque para incluir os 5kg de ricota no pedido."
     resp_a_resumed = await orchestrate_request(
         OrchestratorRequest(
             session_id="session-A",
-            received_at="2026-10-28T09:15:00",
-            message_text="O comprador confirmou que a entrega é na sexta-feira, 30/10/2026.",
+            received_at="2026-10-30T14:00:00",
+            message_text=clarification_text,
         ),
         session_store=store,
+        router_runner=resume_router_a,
         triage_runner=triage_runner_2,
     )
 
     assert resp_a_resumed.selected_flow == "triage"
+    assert isinstance(resp_a_resumed.result, TriageAnalysis)
+    assert resp_a_resumed.result.received_date_reference == "2026-10-28"
+    assert resp_a_resumed.result.extracted_data.delivery_date_start == "2026-10-29"
+    assert resp_a_resumed.result.urgency == UrgencyLevel.URGENT
     assert len(resp_a_resumed.session_history) == 4
     assert len(resp_b.session_history) == 2
 
     prompt_sent_on_resume = triage_runner_2.received_prompts[0]
+    assert "data_recebimento_referencia: 2026-10-28 (quarta-feira)" in prompt_sent_on_resume
+    assert "- 2026-10-29 (quinta-feira) — dia seguinte ao recebimento (amanhã)" in prompt_sent_on_resume
     assert "<historico_sessao_atual>" in prompt_sent_on_resume
-    assert "Preciso pra essa sexta (01/nov)" in prompt_sent_on_resume
+    assert "Preciso pra amanhã de 15kg de queijo coalho" in prompt_sent_on_resume
     assert "LOT-2026-0094" not in prompt_sent_on_resume
+
+    # Garante que <historico_sessao_atual> está separado e fora de <mensagem_recebida>
+    received_block = prompt_sent_on_resume.split("<mensagem_recebida>", maxsplit=1)[1]
+    assert received_block.strip() == f"{clarification_text}\n</mensagem_recebida>"
+    assert "<historico_sessao_atual>" not in received_block
     assert format_history_context([]) == ""
+
+
+@pytest.mark.asyncio
+async def test_resumed_triage_with_fresh_store_and_request_history_and_cancelled_deadline_not_restored() -> None:
+    # Revisão item 4: (a) retomada usando uma NOVA instância de OrchestratorSessionStore
+    # (session_store=None) com history fornecido na requisição mantém a data original 28/10/2026
+    # e histórico separado; (b) quando o funcionário informa que o prazo original foi cancelado
+    # e o agente retorna delivery_date_start=None, o orquestrador NÃO restaura a data antiga.
+    triage_payload_turn1 = {
+        "summary": "Pedido de 15 kg de queijo coalho para amanhã (29/10/2026).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 29/10/2026.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "buyer_name": "Restaurante Raízes",
+            "delivery_date_start": "2026-10-29",
+            "delivery_reference_raw": "amanhã",
+            "items": [{"product": "Queijo coalho", "quantity": 15, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    resp_turn1 = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            flow=OrchestratorFlow.TRIAGE,
+            received_at="2026-10-28T09:15:00",
+            message_text="Preciso pra amanhã de 15kg de queijo coalho.",
+        ),
+        triage_runner=FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload_turn1),
+    )
+
+    # Retomada em 30/10/2026 sem reutilizar session_store (nova instância por padrão),
+    # passando apenas history=resp_turn1.session_history
+    triage_payload_preserved = {
+        **triage_payload_turn1,
+        "summary": "Pedido de 15 kg de queijo coalho confirmado para 29/10/2026 na Rua Nova.",
+    }
+    triage_runner_fresh = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload_preserved)
+    resp_fresh = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            received_at="2026-10-30T11:00:00",
+            message_text="O comprador confirmou entrega na Rua Nova.",
+            history=resp_turn1.session_history,
+        ),
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Esclarecimento da triagem em andamento."},
+        ),
+        triage_runner=triage_runner_fresh,
+    )
+    assert isinstance(resp_fresh.result, TriageAnalysis)
+    assert resp_fresh.result.received_date_reference == "2026-10-28"
+    assert resp_fresh.result.extracted_data.delivery_date_start == "2026-10-29"
+    assert resp_fresh.result.urgency == UrgencyLevel.URGENT
+    fresh_prompt = triage_runner_fresh.received_prompts[0]
+    assert "data_recebimento_referencia: 2026-10-28 (quarta-feira)" in fresh_prompt
+    assert "<historico_sessao_atual>" in fresh_prompt
+    assert "<historico_sessao_atual>" not in fresh_prompt.split("<mensagem_recebida>", maxsplit=1)[1]
+
+    # Agora o funcionário informa que o comprador cancelou o prazo original -> data nula NÃO deve ser restaurada
+    triage_payload_cancelled_date = {
+        "summary": "Pedido de 15 kg de queijo coalho sem prazo definido após cancelamento da data original.",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "indeterminada",
+        "urgency_reason": "Sem prazo definido após cancelamento da data original.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "buyer_name": "Restaurante Raízes",
+            "delivery_date_start": None,
+            "has_date_conflict": False,
+            "items": [{"product": "Queijo coalho", "quantity": 15, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": True,
+    }
+    resp_cancelled = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            received_at="2026-10-30T15:00:00",
+            message_text="O comprador cancelou o prazo original e ainda vai definir uma nova data.",
+            history=resp_fresh.session_history,
+        ),
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Atualização de prazo na triagem."},
+        ),
+        triage_runner=FakeSpecialistRunner(
+            TRIAGE_OUTPUT_KEY,
+            triage_payload_cancelled_date,
+        ),
+    )
+    assert isinstance(resp_cancelled.result, TriageAnalysis)
+    assert resp_cancelled.result.extracted_data.delivery_date_start is None
+    assert resp_cancelled.result.urgency == UrgencyLevel.UNDETERMINED
+
+
+@pytest.mark.asyncio
+async def test_new_triage_message_in_same_session_updates_received_date_reference() -> None:
+    # Revisão item 3: após analisar mensagem recebida em 28/10/2026, ao pedir na mesma
+    # conversa a análise de OUTRA mensagem recebida em 02/11/2026, o agente deve usar
+    # 02/11/2026 (e não 28/10/2026) como referência temporal, e preservar 02/11/2026
+    # em esclarecimentos subsequentes dessa nova mensagem.
+    store = OrchestratorSessionStore()
+
+    first_msg_payload = {
+        "summary": "Primeiro pedido (28/10) de queijo coalho para amanhã (29/10).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 29/10/2026.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "delivery_date_start": "2026-10-29",
+            "items": [{"product": "Queijo coalho", "quantity": 10, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            flow=OrchestratorFlow.TRIAGE,
+            source_id="PED-100",
+            received_at="2026-10-28T09:00:00",
+            message_text="Preciso pra amanhã de 10kg de queijo coalho.",
+        ),
+        session_store=store,
+        triage_runner=FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, first_msg_payload),
+    )
+
+    second_msg_payload = {
+        "summary": "Novo pedido (02/11) de 20 kg de macaxeira para amanhã (03/11).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 03/11/2026.",
+        "received_date_reference": "2026-11-02",
+        "extracted_data": {
+            "delivery_date_start": "2026-11-03",
+            "items": [{"product": "Macaxeira", "quantity": 20, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    second_triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, second_msg_payload)
+    resp_second = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            received_at="2026-11-02T10:00:00",
+            message_text="Analise esta nova mensagem recebida: preciso pra amanhã de 20kg de macaxeira.",
+        ),
+        session_store=store,
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Nova mensagem para triagem."},
+        ),
+        triage_runner=second_triage_runner,
+    )
+
+    assert isinstance(resp_second.result, TriageAnalysis)
+    assert resp_second.result.received_date_reference == "2026-11-02"
+    assert resp_second.result.extracted_data.delivery_date_start == "2026-11-03"
+    second_prompt = second_triage_runner.received_prompts[0]
+    assert "data_recebimento_referencia: 2026-11-02 (segunda-feira)" in second_prompt
+    assert "- 2026-11-03 (terça-feira) — dia seguinte ao recebimento (amanhã)" in second_prompt
+
+    # Esclarecimento da segunda mensagem em 04/11 preserva 02/11 (não volta para 28/10 nem vai para 04/11)
+    third_triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, second_msg_payload)
+    resp_third = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            received_at="2026-11-04T08:30:00",
+            message_text="O comprador confirmou retirada na feira.",
+        ),
+        session_store=store,
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Continuação da triagem atual."},
+        ),
+        triage_runner=third_triage_runner,
+    )
+    assert isinstance(resp_third.result, TriageAnalysis)
+    assert resp_third.result.received_date_reference == "2026-11-02"
+    assert "data_recebimento_referencia: 2026-11-02 (segunda-feira)" in third_triage_runner.received_prompts[0]
 
 
 def test_orchestrator_schema_is_compatible_with_google_genai_transformer() -> None:
