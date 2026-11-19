@@ -7,6 +7,7 @@ from .routers import (
     auth,
     chat,
     document,
+    lot,
     order,
     producer,
     product,
@@ -21,6 +22,7 @@ fastapi_app.include_router(document.router)
 fastapi_app.include_router(order.router)
 fastapi_app.include_router(product.router)
 fastapi_app.include_router(producer.router)
+fastapi_app.include_router(lot.router)
 fastapi_app.include_router(solicitation.router)
 
 app = CORSMiddleware(

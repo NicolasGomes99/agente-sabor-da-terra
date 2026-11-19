@@ -1,5 +1,7 @@
+from decimal import Decimal
 from uuid import UUID
 
+from ..helpers.units import sum_quantities_in_unit
 from ..models.order import Order
 from ..models.order_item import OrderItem
 from ..models.product import Product
@@ -90,6 +92,7 @@ class OrderService:
             product=product,
             quantity=data.quantity,
             unit=data.unit,
+            lots=[],
         )
 
     async def create_order(
@@ -167,6 +170,8 @@ class OrderService:
 
             products = await self._get_products(data.items)
 
+            self._ensure_allocations_still_valid(order, existing_items, data)
+
             updated_items: list[OrderItem] = []
 
             for item_data in data.items:
@@ -214,6 +219,11 @@ class OrderService:
                 order.cancelled = True
                 order.version += 1
 
+                for item in order.items:
+                    for lot in list(item.lots):
+                        await self.repository.session.delete(lot)
+                    item.lots.clear()
+
             await self.repository.session.commit()
 
             return order
@@ -221,3 +231,67 @@ class OrderService:
         except Exception:
             await self.repository.session.rollback()
             raise
+
+    def _ensure_allocations_still_valid(
+        self,
+        order: Order,
+        existing_items: dict[UUID, OrderItem],
+        data: OrderUpdate,
+    ) -> None:
+        incoming_ids = {
+            item_data.id
+            for item_data in data.items
+            if item_data.id is not None
+        }
+        removed_ids = set(existing_items) - incoming_ids
+
+        for item_id in removed_ids:
+            item = existing_items[item_id]
+            if item.lots:
+                raise OrderValidationError(
+                    "O item possui alocações operacionais. Exclua as "
+                    "alocações antes de remover o item do pedido."
+                )
+
+        for item_data in data.items:
+            if item_data.id is None:
+                continue
+            item = existing_items[item_data.id]
+
+            if (
+                item.product_id != item_data.product_id
+                or item.unit != item_data.unit
+            ) and item.lots:
+                raise OrderValidationError(
+                    "O produto ou a unidade do item possui alocações "
+                    "operacionais. Ajuste ou exclua as alocações antes "
+                    "de salvar."
+                )
+
+            if item.quantity > item_data.quantity:
+                allocated = self._allocated_in_item_unit(item)
+                if allocated is not None and allocated > item_data.quantity:
+                    raise OrderValidationError(
+                        "A nova quantidade do item é menor que o total já "
+                        "alocado. Ajuste ou exclua as alocações antes de "
+                        "salvar."
+                    )
+
+        start = data.delivery_start_date
+        end = data.delivery_end_date or data.delivery_start_date
+
+        for item in existing_items.values():
+            for lot in item.lots:
+                if not (start <= lot.delivery_date <= end):
+                    raise OrderValidationError(
+                        f"A data {lot.delivery_date.isoformat()} de uma "
+                        "alocação ficou fora do novo prazo de entrega "
+                        f"({start.isoformat()} a {end.isoformat()}). Ajuste "
+                        "ou exclua a alocação antes de salvar."
+                    )
+
+    def _allocated_in_item_unit(self, item: OrderItem) -> Decimal | None:
+        return sum_quantities_in_unit(
+            [(lot.quantity, lot.unit) for lot in item.lots],
+            item.unit,
+        )
