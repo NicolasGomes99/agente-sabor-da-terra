@@ -26,11 +26,12 @@ POLICY_EXCERPT = (
     "de 48 horas úteis na região metropolitana, com lote mínimo de 150 kg."
 )
 
-# ATENÇÃO: nomes de colunas e datas são suposições. Troque pelas linhas reais do seu lotes.csv.
+# Cenário de aceitação da issue #12 (US06/US07): os dois lotes pertencem a P004,
+# com colheita em setembro de 2026 e entrega prevista para 08/09/2026.
 LOTES_CSV = (
-    "lote_id,produtor_id,produto,quantidade,unidade,data_colheita,data_entrega_prevista,disponibilidade_conf\n"
-    "LOT-2026-0094,P004,alface,300,unidades,2026-03-09,2026-03-11,sim\n"
-    "LOT-2026-0095,P001,coentro,150,maços,2026-03-10,2026-03-12,sim\n"
+    "lote_id,produtor_id,produto,quantidade,unidade,data_colheita,data_entrega_prevista,disponibilidade_conf,pedido_historico\n"
+    "LOT-2026-0094,P004,alface,300,unidades,2026-09-06,2026-09-08,sim,PED-2026-SEP-008\n"
+    "LOT-2026-0095,P004,coentro,150,maços,2026-09-07,2026-09-08,sim,\n"
 )
 
 
@@ -144,15 +145,16 @@ async def seed_citation_scenario() -> None:
             1,
             "O que sabemos sobre o lote LOT-2026-0094?",
             "O lote LOT-2026-0094 é do produtor P004: 300 unidades de alface, "
-            "colhidas em 09/03/2026, com entrega prevista para 11/03/2026.",
+            "colhidas em 06/09/2026, com entrega prevista para 08/09/2026. "
+            "Referência do pedido histórico: PED-2026-SEP-008.",
         )
         answer_0095 = add_exchange(
             session,
             lotes_chat.id,
             3,
             "E o lote LOT-2026-0095?",
-            "O lote LOT-2026-0095 é do produtor P001: 150 maços de coentro, "
-            "colhidos em 10/03/2026, com entrega prevista para 12/03/2026.",
+            "O lote LOT-2026-0095 é do produtor P004: 150 maços de coentro, "
+            "colhidos em 07/09/2026, com entrega prevista para 08/09/2026.",
         )
         await session.flush()
         session.add(

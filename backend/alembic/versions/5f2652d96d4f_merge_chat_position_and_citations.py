@@ -5,24 +5,21 @@ Revises: 0003_add_chat_message_position, 0003_create_citations
 Create Date: 2026-11-18 23:25:17.336450
 
 """
-from typing import Sequence, Union
 
-from alembic import op
-import sqlalchemy as sa
+from collections.abc import Sequence
 
-
-# revision identifiers, used by Alembic.
-revision: str = '5f2652d96d4f'
-down_revision: Union[str, Sequence[str], None] = ('0003_add_chat_message_position', '0003_create_citations')
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "5f2652d96d4f"
+down_revision: str | Sequence[str] | None = (
+    "0003_add_chat_message_position",
+    "0003_create_citations",
+)
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     """Upgrade schema."""
-    pass
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    pass

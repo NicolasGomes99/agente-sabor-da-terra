@@ -7,14 +7,14 @@ from fastapi.responses import StreamingResponse
 from ...dependencies import get_current_user, get_document_service
 from ...models.document import Document
 from ...schemas.document import DocumentResponse
-from ...services.document import DocumentNotFoundError, DocumentService
-from .stream import INLINE_MEDIA_TYPES, DocumentStreamResponse, file_responses
-from .upload import document_upload
 from ...services.document import (
     DocumentCitedError,
     DocumentNotFoundError,
     DocumentService,
 )
+from .stream import INLINE_MEDIA_TYPES, DocumentStreamResponse, file_responses
+from .upload import document_upload
+
 ERROR_DETAIL_CONTENT = {
     "application/json": {
         "schema": {

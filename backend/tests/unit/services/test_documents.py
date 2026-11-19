@@ -10,21 +10,20 @@ from io import BytesIO
 from threading import Event as ThreadEvent
 from unittest.mock import Mock, call
 from uuid import uuid4
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from api.models.chat_message import ChatMessage
 from api.models.chat_session import ChatSession
 from api.models.citation import Citation
 from api.models.document import Document, DocumentChunk
+from api.repositories.document import DocumentRepository
 from api.services.document import (
     DocumentCitedError,
     DocumentNotFoundError,
     DocumentService,
 )
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from api.models.document import Document
-from api.repositories.document import DocumentRepository
-from api.services.document import DocumentNotFoundError, DocumentService
 from api.storage.base import DocumentStorage
 
 
@@ -40,6 +39,7 @@ def operations() -> Mock:
     operations.session = Mock(spec=AsyncSession)
     operations.repository.session = operations.session
     operations.storage = Mock(spec=DocumentStorage)
+    operations.repository.list_citations_by_document.return_value = []
     return operations
 
 
@@ -274,15 +274,7 @@ async def test_cancelled_write_waits_for_storage_worker(service, operations, doc
             "storage.delete",
         ]
     )
-@pytest.fixture
-def operations() -> Mock:
-    operations = Mock()
-    operations.repository = Mock(spec=DocumentRepository)
-    operations.session = Mock(spec=AsyncSession)
-    operations.repository.session = operations.session
-    operations.storage = Mock(spec=DocumentStorage)
-    operations.repository.list_citations_by_document.return_value = []
-    return operations
+
 
 @pytest.mark.asyncio
 async def test_delete_is_blocked_when_document_is_cited(service, operations, document):

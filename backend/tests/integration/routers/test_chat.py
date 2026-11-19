@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import httpx
@@ -10,17 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from api import database
 from api.app import fastapi_app as app
 from api.database import get_db
+from api.dependencies import get_document_storage
 from api.models.chat_message import ChatMessageRole
+from api.models.document import Document, DocumentChunk
 from api.repositories.chat import ChatRepository
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
-from unittest.mock import Mock
-
-from api.dependencies import get_document_storage
-from api.models.citation import Citation  # noqa: F401  (usado via repositório)
-from api.models.document import Document, DocumentChunk
 from api.storage.base import DocumentStorage
+
 TEST_SECRET_KEY = "test-secret-key-with-at-least-32-bytes-long"
 
 
