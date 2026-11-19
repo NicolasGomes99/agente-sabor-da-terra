@@ -14,9 +14,16 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.document import Document
+from api.models.chat_message import ChatMessage
+from api.models.chat_session import ChatSession
+from api.models.citation import Citation
+from api.models.document import Document, DocumentChunk
 from api.repositories.document import DocumentRepository
-from api.services.document import DocumentNotFoundError, DocumentService
+from api.services.document import (
+    DocumentCitedError,
+    DocumentNotFoundError,
+    DocumentService,
+)
 from api.storage.base import DocumentStorage
 
 
@@ -32,6 +39,7 @@ def operations() -> Mock:
     operations.session = Mock(spec=AsyncSession)
     operations.repository.session = operations.session
     operations.storage = Mock(spec=DocumentStorage)
+    operations.repository.list_citations_by_document.return_value = []
     return operations
 
 
@@ -165,6 +173,7 @@ async def test_delete_commits_record_before_removing_file(service, operations, d
 
     assert operations.mock_calls == [
         call.repository.get_by_id(document.id),
+        call.repository.list_citations_by_document(document.id),
         call.repository.delete(document),
         call.session.commit(),
         call.storage.delete(document.storage_key),
@@ -192,6 +201,7 @@ async def test_delete_preserves_file_when_database_operation_fails(
     assert raised.value is error
     assert [entry[0] for entry in operations.mock_calls] == [
         "repository.get_by_id",
+        "repository.list_citations_by_document",
         *expected_calls,
         "session.rollback",
     ]
@@ -209,6 +219,7 @@ async def test_delete_logs_storage_failure_after_commit(service, operations, doc
     assert raised.value is error
     assert operations.mock_calls == [
         call.repository.get_by_id(document.id),
+        call.repository.list_citations_by_document(document.id),
         call.repository.delete(document),
         call.session.commit(),
         call.storage.delete(document.storage_key),
@@ -255,5 +266,35 @@ async def test_cancelled_write_waits_for_storage_worker(service, operations, doc
     assert [entry[0] for entry in operations.mock_calls] == (
         ["storage.save", "repository.create", "session.commit"]
         if operation == "save"
-        else ["repository.get_by_id", "repository.delete", "session.commit", "storage.delete"]
+        else [
+            "repository.get_by_id",
+            "repository.list_citations_by_document",
+            "repository.delete",
+            "session.commit",
+            "storage.delete",
+        ]
     )
+
+
+@pytest.mark.asyncio
+async def test_delete_is_blocked_when_document_is_cited(service, operations, document):
+    chunk = DocumentChunk(
+        id=uuid4(), document_id=document.id, content="x", record_id="LOT-2026-0094"
+    )
+    message = ChatMessage(id=uuid4())
+    chat = ChatSession(id=uuid4(), user_id=uuid4(), title="Conversa de lotes")
+    citation = Citation(message_id=message.id, chunk_id=chunk.id)
+    operations.repository.get_by_id.return_value = document
+    operations.repository.list_citations_by_document.return_value = [
+        (citation, chunk, message, chat)
+    ]
+
+    with pytest.raises(DocumentCitedError) as raised:
+        await service.delete_document(document.id)
+
+    assert "registro LOT-2026-0094" in str(raised.value)
+    assert "Conversa de lotes" in str(raised.value)
+    assert [entry[0] for entry in operations.mock_calls] == [
+        "repository.get_by_id",
+        "repository.list_citations_by_document",
+    ]

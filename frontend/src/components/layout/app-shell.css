@@ -167,48 +167,21 @@
 
 @media (max-width: 30rem) {
   .app-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
+    grid-template-columns: 3.25rem minmax(0, 1fr);
   }
 
   .app-sidebar {
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0.5rem;
-    height: auto;
-    padding: 0.5rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  .sidebar-header,
-  .sidebar-navigation button,
-  .sidebar-footer .user-avatar,
-  .sidebar-nav-item span {
-    display: none;
-  }
-
-  .sidebar-navigation {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .sidebar-nav-item {
-    width: auto;
-    padding-inline: 0.375rem;
-    font-size: 0.8125rem;
+    padding-inline: 0.25rem;
+    overflow-y: auto;
   }
 
   .sidebar-footer {
-    margin-top: 0;
-    padding-top: 0;
-    border-top: 0;
+    flex-direction: column;
+    gap: 0.375rem;
   }
 
+  .sidebar-nav-item,
   .logout-button {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
   }
 }

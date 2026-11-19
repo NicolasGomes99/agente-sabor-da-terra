@@ -3,7 +3,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.document import Document
+from ..models.chat_message import ChatMessage
+from ..models.chat_session import ChatSession
+from ..models.citation import Citation
+from ..models.document import Document, DocumentChunk
 
 
 class DocumentRepository:
@@ -23,6 +26,20 @@ class DocumentRepository:
 
     async def get_by_id(self, document_id: UUID) -> Document | None:
         return await self.session.get(Document, document_id)
+
+    async def list_citations_by_document(
+        self, document_id: UUID
+    ) -> list[tuple[Citation, DocumentChunk, ChatMessage, ChatSession]]:
+        statement = (
+            select(Citation, DocumentChunk, ChatMessage, ChatSession)
+            .join(DocumentChunk, Citation.chunk_id == DocumentChunk.id)
+            .join(ChatMessage, Citation.message_id == ChatMessage.id)
+            .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+            .where(DocumentChunk.document_id == document_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        result = await self.session.execute(statement)
+        return list(result.all())
 
     async def delete(self, document: Document) -> None:
         await self.session.delete(document)
