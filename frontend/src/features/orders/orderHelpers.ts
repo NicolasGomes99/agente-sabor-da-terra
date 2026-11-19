@@ -69,3 +69,12 @@ export function validQuantity(value: string): boolean {
     /[1-9]/.test(value)
   )
 }
+
+export function balanceLabel(balance: string | null | undefined): string {
+  if (balance === null || balance === undefined) return 'Indeterminado'
+  return balance
+}
+
+export function availabilityLabel(confirmed: boolean | null): string {
+  return confirmed ? 'Confirmada' : 'Pendente'
+}
