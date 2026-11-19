@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Lot, LotImport, Producer, ProducerProduct, Product
+from ..models import Lot, Producer, ProducerProduct, Product
 from .parsing import (
     extract_unit,
     parse_active,
@@ -13,8 +13,6 @@ from .parsing import (
     split_products,
 )
 
-LOTES_SOURCE_FILE = "lotes.csv"
-
 
 @dataclass
 class ImportSummary:
@@ -22,7 +20,6 @@ class ImportSummary:
     producers_created: int = 0
     links_created: int = 0
     lots_created: int = 0
-    lots_reused: int = 0
 
 
 async def _get_product(session: AsyncSession, name: str) -> Product | None:
@@ -46,18 +43,6 @@ async def _get_link(
     )
 
 
-async def _get_lot_import(
-    session: AsyncSession,
-    record_id: str,
-) -> LotImport | None:
-    return await session.scalar(
-        select(LotImport).where(
-            LotImport.source_file == LOTES_SOURCE_FILE,
-            LotImport.record_id == record_id,
-        )
-    )
-
-
 async def import_facepe(
     session: AsyncSession,
     producers_rows: list[dict[str, str]],
@@ -65,8 +50,9 @@ async def import_facepe(
 ) -> ImportSummary:
     """Importa o catálogo, os produtores, os vínculos e os lotes históricos.
 
-    A carga é idempotente (create-if-missing): reutiliza produtos, produtores
-    e lotes já existentes sem sobrescrever dados esclarecidos na aplicação.
+    Produtos, produtores e vínculos são reaproveitados pelos seus
+    identificadores naturais (nome e código), respeitando as restrições de
+    unicidade do modelo.
     """
     summary = ImportSummary()
 
@@ -119,7 +105,6 @@ async def import_facepe(
                     summary.links_created += 1
 
         for row in lots_rows:
-            record_id = row["lote_id"].strip()
             code = row["produtor_id"].strip()
             producer = producers_by_code.get(code) or await _get_producer(
                 session,
@@ -127,34 +112,20 @@ async def import_facepe(
             )
             if producer is None:
                 raise ValueError(
-                    f"Produtor {code} não encontrado para o lote {record_id}."
+                    f"Produtor {code} não encontrado para o lote "
+                    f"{row['lote_id'].strip()}."
                 )
-
-            existing = await _get_lot_import(session, record_id)
-            if existing is not None:
-                summary.lots_reused += 1
-                continue
-
-            lot = Lot(
-                item_id=None,
-                producer_id=producer.id,
-                quantity=parse_quantity(row["quantidade_kg"]),
-                unit=extract_unit(row.get("observacao")),
-                delivery_date=parse_date(row["data_entrega"]),
-                availability_confirmed=None,
-            )
-            session.add(lot)
-            await session.flush()
 
             session.add(
-                LotImport(
-                    lot_id=lot.id,
-                    source_file=LOTES_SOURCE_FILE,
-                    record_id=record_id,
-                    record_fields=dict(row),
+                Lot(
+                    item_id=None,
+                    producer_id=producer.id,
+                    quantity=parse_quantity(row["quantidade_kg"]),
+                    unit=extract_unit(row.get("observacao")),
+                    delivery_date=parse_date(row["data_entrega"]),
+                    availability_confirmed=None,
                 )
             )
-            await session.flush()
             summary.lots_created += 1
 
         await session.commit()

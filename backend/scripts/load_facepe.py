@@ -26,11 +26,10 @@ async def run(data_dir: Path) -> None:
         summary = await import_facepe(session, producers_rows, lots_rows)
 
     print("Carga da base Facepe concluída:")
-    print(f"  produtos criados:     {summary.products_created}")
-    print(f"  produtores criados:   {summary.producers_created}")
-    print(f"  vínculos criados:     {summary.links_created}")
-    print(f"  lotes criados:        {summary.lots_created}")
-    print(f"  lotes reaproveitados: {summary.lots_reused}")
+    print(f"  produtos criados:   {summary.products_created}")
+    print(f"  produtores criados: {summary.producers_created}")
+    print(f"  vínculos criados:   {summary.links_created}")
+    print(f"  lotes criados:      {summary.lots_created}")
 
 
 def main() -> None:

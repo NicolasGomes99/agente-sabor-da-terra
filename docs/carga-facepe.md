@@ -22,7 +22,7 @@ Por padrão, o comando lê `backend/data/`. Para outro diretório:
 uv run python scripts/load_facepe.py --data-dir /caminho/para/os/dados
 ```
 
-A carga é idempotente: reexecutar reaproveita os registros existentes (produtos por nome, produtores por código e lotes pelo controle de importação), preservando os UUIDs e os dados já esclarecidos ou alterados na aplicação, sem duplicatas.
+A carga é executada uma única vez durante a preparação do ambiente, antes da operação. Produtos e produtores são reaproveitados pelos seus identificadores naturais (nome e código), respeitando as restrições de unicidade do modelo.
 
 ## Mapeamento da base para as entidades
 
@@ -47,17 +47,16 @@ O catálogo (`Produto`) é formado pelos nomes presentes na coluna `produtos` de
 
 Os nomes já vêm padronizados na base. Em `lotes.csv`, a coluna `produto` pode indicar uma variedade que não é o nome do catálogo — por exemplo, `goiaba paluma` e `manga tommy` correspondem aos produtos `goiaba` e `manga`. O nome original de cada lote é preservado na linha de origem, sem forçar o vínculo ao catálogo.
 
-### Lotes (`lotes.csv` → `Lote` + `LotImport`)
+### Lotes (`lotes.csv` → `Lote`)
 
 | Coluna da base | Uso |
 | --- | --- |
-| `lote_id` | `LotImport.record_id` (identificação da linha de origem) |
 | `produtor_id` | resolve para `Produtor.code` → `Lote.producer_id` |
 | `quantidade_kg` | `Lote.quantity` (o nome da coluna **não** define a unidade) |
 | `data_entrega` | `Lote.delivery_date` |
 | `observacao` | fonte da unidade (ver abaixo) |
 
-`Lote.item_id` fica `NULL` e `Lote.availability_confirmed` fica `NULL` (a base não informa a confirmação). As demais colunas (`produto`, `pedido_id`, `comprador`, `data_colheita`, `temperatura_transporte_c`, `validade`, `inspecao_visual`, `observacao`, etc.) são preservadas em `LotImport.record_fields` para localizar a linha original.
+`Lote.item_id` fica `NULL` e `Lote.availability_confirmed` fica `NULL` (a base não informa a confirmação). As demais colunas do CSV (`lote_id`, `produto`, `pedido_id`, `comprador`, `data_colheita`, `temperatura_transporte_c`, `validade`, `inspecao_visual`, `observacao`, etc.) permanecem nos arquivos de origem e serão disponibilizadas pela indexação documental, sem duplicá-las nas entidades de negócio.
 
 ## Tratamento de unidades ambíguas
 
