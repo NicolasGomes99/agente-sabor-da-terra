@@ -1,7 +1,7 @@
 """add conversational agent metadata columns to chat_messages
 
-Revision ID: 0009_chat_agent_metadata
-Revises: 8a63f9d204e1
+Revision ID: 0010_chat_agent_metadata
+Revises: 0009_create_lots
 Create Date: 2026-11-19 18:35:00
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0009_chat_agent_metadata"
-down_revision: str | Sequence[str] | None = "8a63f9d204e1"
+revision: str = "0010_chat_agent_metadata"
+down_revision: str | Sequence[str] | None = "0009_create_lots"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

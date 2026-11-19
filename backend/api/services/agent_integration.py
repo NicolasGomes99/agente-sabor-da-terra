@@ -167,7 +167,7 @@ def extract_triage_context_from_messages(
     sender: str | None = None
     buyer_name: str | None = None
     channel: str | None = None
-    for msg in ordered:
+    for msg in reversed(ordered):
         meta = msg.context_metadata
         if not isinstance(meta, dict):
             continue
@@ -181,6 +181,8 @@ def extract_triage_context_from_messages(
             buyer_name = meta["buyer_name"].strip()
         if channel is None and isinstance(meta.get("channel"), str) and meta["channel"].strip():
             channel = meta["channel"].strip()
+        if sender is not None and buyer_name is not None and channel is not None:
+            break
 
     return PreparedTriageContext(
         original_received_at=original_received_at,
@@ -649,6 +651,10 @@ class AgentIntegrationService:
         solicitation_id: UUID | None,
         sources: Sequence[ConsultationSourceItem] | None,
         financial_records: Sequence[ConsultationSourceItem] | None,
+        producer_id: str | None = None,
+        period_start: datetime | date | str | None = None,
+        period_end: datetime | date | str | None = None,
+        financial_reference_date: datetime | date | str | None = None,
     ) -> RetrievedDocumentSources:
         if sources is not None or financial_records is not None:
             return RetrievedDocumentSources(
@@ -667,6 +673,10 @@ class AgentIntegrationService:
                 reference_date=reference_date,
                 history=history,
                 solicitation_id=solicitation_id,
+                producer_id=producer_id,
+                period_start=period_start,
+                period_end=period_end,
+                financial_reference_date=financial_reference_date,
             )
         )
 
@@ -710,6 +720,10 @@ class AgentIntegrationService:
             solicitation_id=None,
             sources=sources,
             financial_records=financial_records,
+            producer_id=producer_id,
+            period_start=period_start,
+            period_end=period_end,
+            financial_reference_date=financial_reference_date,
         )
         request = prepare_free_chat_request(
             session_id=session_id,

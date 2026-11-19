@@ -21,6 +21,10 @@ from ..agents.triage.schemas import (
 from ..models.solicitation import SolicitationType, SolicitationUrgency
 
 
+class DocumentRetrievalError(RuntimeError):
+    """Erro explícito na execução da busca documental (distinto de busca sem resultados)."""
+
+
 class DocumentRetrievalContext(BaseModel):
     """Contexto enviado ao provedor de recuperação documental (#50 / #52)."""
 
@@ -46,6 +50,22 @@ class DocumentRetrievalContext(BaseModel):
     solicitation_id: UUID | None = Field(
         default=None,
         description="Identificador da solicitação quando a sessão for de triagem.",
+    )
+    producer_id: str | None = Field(
+        default=None,
+        description="Identificador ou nome do produtor para recuperação financeira estruturada (#40 / #52).",
+    )
+    period_start: datetime | date | str | None = Field(
+        default=None,
+        description="Data inicial do período para filtros estruturados (#40 / #52).",
+    )
+    period_end: datetime | date | str | None = Field(
+        default=None,
+        description="Data final do período para filtros estruturados (#40 / #52).",
+    )
+    financial_reference_date: datetime | date | str | None = Field(
+        default=None,
+        description="Data de referência do cálculo financeiro quando distinta da data da interação.",
     )
 
     @field_validator("query_text")

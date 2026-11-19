@@ -69,6 +69,7 @@ O serviço de recuperação documental implementa o protocolo `DocumentSourcePro
 ```python
 from api.schemas.agent_integration import (
     DocumentRetrievalContext,
+    DocumentRetrievalError,
     DocumentSourceProvider,
     RetrievedDocumentSources,
 )
@@ -80,15 +81,18 @@ class RagDocumentSourceProvider(DocumentSourceProvider):
         self,
         context: DocumentRetrievalContext,
     ) -> RetrievedDocumentSources:
-        chunks = ...  # DocumentChunk com relationship `.document` carregado
-        financial_chunks = ...  # Coleção exaustiva de financeiro.csv quando aplicável
+        try:
+            chunks = ...  # DocumentChunk com relationship `.document` carregado
+            financial_chunks = ...  # Coleção exaustiva de financeiro.csv quando aplicável
+        except Exception as exc:
+            raise DocumentRetrievalError("Falha na consulta documental.") from exc
         return RetrievedDocumentSources(
             sources=document_chunks_to_source_items(chunks),
             financial_records=document_chunks_to_source_items(financial_chunks),
         )
 ```
 
-Cada `DocumentChunk` convertido por `document_chunk_to_source_item()` preserva `source_id = str(chunk.id)`, `document_id = str(chunk.document_id)`, `document_name = chunk.document.original_filename`, `record_id`, `record_fields` e `source_kind`.
+Cada `DocumentChunk` convertido por `document_chunk_to_source_item()` preserva `source_id = str(chunk.id)`, `document_id = str(chunk.document_id)`, `document_name = chunk.document.original_filename`, `record_id`, `record_fields` e `source_kind`. Uma busca sem resultados retorna `RetrievedDocumentSources(sources=[], financial_records=None)`, enquanto erros de execução devem sinalizar `DocumentRetrievalError`.
 
 ### 3. Exemplo de uso pelos serviços de chat (`#51`)
 

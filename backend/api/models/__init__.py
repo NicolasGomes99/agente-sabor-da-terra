@@ -3,6 +3,7 @@ from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .citation import Citation
 from .document import Document, DocumentChunk
+from .lot import Lot
 from .order import Order
 from .order_item import OrderItem
 from .producer import Producer
@@ -18,6 +19,7 @@ __all__ = [
     "Citation",
     "Document",
     "DocumentChunk",
+    "Lot",
     "Order",
     "OrderItem",
     "Producer",

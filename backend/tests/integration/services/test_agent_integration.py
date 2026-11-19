@@ -389,8 +389,16 @@ async def test_persists_consultation_response_with_only_provided_citations_and_r
         user_msg.content,
         interaction_at=datetime(2026, 11, 19, 10, 0, tzinfo=PERNAMBUCO_TIMEZONE),
         exclude_message_id=user_msg.id,
+        producer_id="P004",
+        period_start="2026-09-01",
+        period_end="2026-09-30",
+        financial_reference_date="2026-09-30",
     )
     assert len(source_provider.received_contexts) == 1
+    assert source_provider.received_contexts[0].producer_id == "P004"
+    assert source_provider.received_contexts[0].period_start == "2026-09-01"
+    assert source_provider.received_contexts[0].period_end == "2026-09-30"
+    assert source_provider.received_contexts[0].financial_reference_date == "2026-09-30"
 
     # Retorno simulado tenta citar 2 fontes disponibilizadas + 1 fonte NÃO disponibilizada
     simulated_orch_response = OrchestratorResponse(
@@ -591,6 +599,29 @@ async def test_failed_citation_or_response_persistence_rolls_back_preserving_pri
 
     messages_after_savepoint_fail = await ChatRepository(db_session).list_messages(session_id)
     assert [m.id for m in messages_after_savepoint_fail] == [prior_user_msg_id]
+
+    # Caso 4: falha na persistência da própria resposta (add_message) também preserva o histórico anterior
+    monkeypatch.setattr(ChatRepository, "add_citation", original_add_citation)
+    original_add_message = ChatRepository.add_message
+
+    async def failing_add_message(
+        self: ChatRepository,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ChatMessage:
+        await original_add_message(self, *args, **kwargs)
+        raise RuntimeError("falha simulada ao gravar resposta")
+
+    monkeypatch.setattr(ChatRepository, "add_message", failing_add_message)
+    with pytest.raises(RuntimeError, match="falha simulada ao gravar resposta"):
+        await integration.persist_agent_response(
+            session_id,
+            failing_runtime_prepared,
+            provided_sources=[valid_source],
+        )
+
+    messages_after_response_fail = await ChatRepository(db_session).list_messages(session_id)
+    assert [m.id for m in messages_after_response_fail] == [prior_user_msg_id]
     assert (
         await db_session.scalar(
             select(func.count())

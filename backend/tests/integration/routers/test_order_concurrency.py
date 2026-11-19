@@ -56,6 +56,8 @@ def normalize_order(snapshot: dict) -> dict:
 
     for item in result["items"]:
         item["quantity"] = Decimal(item["quantity"])
+        if item.get("balance") is not None:
+            item["balance"] = Decimal(item["balance"])
 
     result["items"].sort(key=lambda item: item["id"])
 

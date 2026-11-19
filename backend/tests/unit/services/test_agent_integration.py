@@ -32,6 +32,7 @@ from api.models.solicitation import SolicitationType, SolicitationUrgency
 from api.repositories.chat import normalize_message_reference_timestamp
 from api.schemas.agent_integration import (
     DocumentRetrievalContext,
+    DocumentRetrievalError,
     InMemoryDocumentSourceProvider,
     PreparedTriageContext,
 )
@@ -358,6 +359,35 @@ def test_prepare_triage_chat_request_distinguishes_october_receipt_from_november
         turn.content != "O cliente confirmou 30 kg de queijo coalho."
         for turn in req.history
     )
+
+    # Se houver nova triagem na mesma sessão, extract_triage_context_from_messages usa os metadados mais recentes
+    second_triage = [
+        _make_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.USER,
+            content="Primeiro pedido antigo",
+            position=1,
+            flow=ChatMessageFlow.TRIAGE.value,
+            reference_received_at=oct_28,
+            source_id="PED-2026-003",
+            context_metadata={"sender": "Supermercado Antigo", "channel": "whatsapp"},
+        ),
+        _make_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.USER,
+            content="Segundo pedido novo",
+            position=2,
+            flow=ChatMessageFlow.TRIAGE.value,
+            reference_received_at=nov_19,
+            source_id="PED-2026-099",
+            context_metadata={"sender": "Restaurante Novo", "channel": "gmail"},
+        ),
+    ]
+    latest_ctx = extract_triage_context_from_messages(second_triage, session_id=session_id)
+    assert latest_ctx.original_received_at == nov_19
+    assert latest_ctx.source_id == "PED-2026-099"
+    assert latest_ctx.sender == "Restaurante Novo"
+    assert latest_ctx.channel == "gmail"
 
     # Também funciona para registro legado sem metadados quando PreparedTriageContext informa a origem (#39)
     legacy_msg = _make_chat_message(
@@ -741,3 +771,15 @@ async def test_prepared_requests_work_with_orchestrate_request_without_ai_or_ram
         original_request=free_req,
     )
     assert prepared_consult.citation_chunk_ids == [chunk_id]
+
+    # Erro de recuperação documental é distinto de busca vazia (#50 / #52)
+    empty_provider = InMemoryDocumentSourceProvider()
+    empty_result = await empty_provider.retrieve_sources(
+        DocumentRetrievalContext(
+            session_id=session_id,
+            query_text="Consulta sem fontes",
+        )
+    )
+    assert empty_result.sources == []
+    assert empty_result.financial_records is None
+    assert issubclass(DocumentRetrievalError, RuntimeError)

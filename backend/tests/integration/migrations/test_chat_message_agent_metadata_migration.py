@@ -12,8 +12,8 @@ from testcontainers.community.postgres import PostgresContainer
 
 from alembic import command
 
-AGENT_METADATA_REVISION = "0009_chat_agent_metadata"
-PARENT_REVISION = "8a63f9d204e1"
+AGENT_METADATA_REVISION = "0010_chat_agent_metadata"
+PARENT_REVISION = "0009_create_lots"
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
