@@ -12,6 +12,10 @@ import {
 } from '../../src/features/chat/chatApi'
 import { listDocuments } from '../../src/features/documents/documentsApi'
 import { getProducer, listProducers, listProducts } from '../../src/features/registry/registryApi'
+import {
+  getSolicitationSession,
+  listSolicitations,
+} from '../../src/features/triage/triageApi'
 import { ApiError } from '../../src/lib/api-client'
 import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
@@ -31,10 +35,18 @@ vi.mock('../../src/features/chat/chatApi', () => ({
   listChatSessions: vi.fn(),
   sendChatMessage: vi.fn(),
 }))
+vi.mock('../../src/features/triage/triageApi', () => ({
+  finalizeSolicitation: vi.fn(),
+  getSolicitationSession: vi.fn(),
+  listSolicitations: vi.fn(),
+  sendSolicitationMessage: vi.fn(),
+}))
 const chatList = vi.mocked(listChatSessions)
 const chatRead = vi.mocked(getChatSession)
 const chatCreate = vi.mocked(createChatSession)
 const chatSend = vi.mocked(sendChatMessage)
+const triageList = vi.mocked(listSolicitations)
+const triageRead = vi.mocked(getSolicitationSession)
 const session = { id: 'session-a', title: 'Conversa A', created_at: '2026-11-17T12:00:00Z' }
 
 function renderRoutes(initialEntry: string) {
@@ -58,6 +70,8 @@ describe('AppRoutes', () => {
     chatRead.mockReset().mockResolvedValue({ ...session, messages: [] })
     chatCreate.mockReset().mockResolvedValue(session)
     chatSend.mockReset()
+    triageList.mockReset().mockResolvedValue([])
+    triageRead.mockReset()
   })
 
   it('redirects unauthenticated users from chat to login', () => {
@@ -81,6 +95,41 @@ describe('AppRoutes', () => {
 
     expect(screen.getByRole('heading', { name: 'Acesso à cooperativa' })).toBeTruthy()
     expect(list).not.toHaveBeenCalled()
+  })
+
+  it.each(['/triagem', '/triagem/solicitation-a'])(
+    'redirects unauthenticated users from triage route %s to login',
+    (path) => {
+      renderRoutes(path)
+
+      expect(
+        screen.getByRole('heading', { name: 'Acesso à cooperativa' }),
+      ).toBeTruthy()
+      expect(triageList).not.toHaveBeenCalled()
+      expect(triageRead).not.toHaveBeenCalled()
+    },
+  )
+
+  it('returns to login when the triage queue rejects the token', async () => {
+    setAccessToken('expired-token')
+    triageList.mockRejectedValueOnce(new ApiError(401, null))
+    renderRoutes('/triagem')
+
+    expect(
+      await screen.findByRole('heading', { name: 'Acesso à cooperativa' }),
+    ).toBeTruthy()
+    expect(getAccessToken()).toBeNull()
+  })
+
+  it('returns to login when the triage detail rejects the token', async () => {
+    setAccessToken('expired-token')
+    triageRead.mockRejectedValueOnce(new ApiError(401, null))
+    renderRoutes('/triagem/solicitation-a')
+
+    expect(
+      await screen.findByRole('heading', { name: 'Acesso à cooperativa' }),
+    ).toBeTruthy()
+    expect(getAccessToken()).toBeNull()
   })
 
   it('renders documents for an authenticated user', async () => {
