@@ -220,35 +220,46 @@ class TriageExtractedData(BaseModel):
 
         canonical: dict[DeadlineAction, TriageDeadline] = {}
 
+        input_has_date_conflict = self.has_date_conflict
+
         # Fonte de verdade: `deadlines` prevalece sobre os campos individuais quando
-        # a ação está presente na lista; os campos individuais alimentam `deadlines`
-        # apenas quando a ação está ausente da lista, e conflitos propagam nos dois sentidos.
+        # ambos possuem datas divergentes; campos individuais preenchem lacunas quando
+        # a ação ou a data estiver ausente em `deadlines` (sem conflito).
         if DeadlineAction.DELIVERY in grouped:
             dl = _consolidate_action_entries(
                 DeadlineAction.DELIVERY,
                 grouped[DeadlineAction.DELIVERY],
             )
-            effective_conflict = dl.has_conflict or self.has_date_conflict
+            effective_conflict = dl.has_conflict or input_has_date_conflict
             effective_conflict_desc = (
                 dl.conflict_description or self.date_conflict_description
             )
+            effective_start = (
+                dl.date_start
+                if dl.date_start is not None or effective_conflict
+                else self.delivery_date_start
+            )
+            effective_end = (
+                dl.date_end
+                if dl.date_start is not None or effective_conflict
+                else self.delivery_date_end
+            )
             effective_raw = dl.reference_raw or self.delivery_reference_raw
-            dl = TriageDeadline(
+            canonical[DeadlineAction.DELIVERY] = TriageDeadline(
                 action=DeadlineAction.DELIVERY,
-                date_start=dl.date_start,
-                date_end=dl.date_end,
+                date_start=effective_start,
+                date_end=effective_end,
                 reference_raw=effective_raw,
                 has_conflict=effective_conflict,
                 conflict_description=effective_conflict_desc,
             )
-            canonical[DeadlineAction.DELIVERY] = dl
-        elif self.delivery_date_start is not None or self.has_date_conflict:
+        elif self.delivery_date_start is not None:
             canonical[DeadlineAction.DELIVERY] = TriageDeadline(
                 action=DeadlineAction.DELIVERY,
                 date_start=self.delivery_date_start,
                 date_end=self.delivery_date_end,
                 reference_raw=self.delivery_reference_raw,
-                has_conflict=self.has_date_conflict,
+                has_conflict=input_has_date_conflict,
                 conflict_description=self.date_conflict_description,
             )
 
@@ -257,10 +268,15 @@ class TriageExtractedData(BaseModel):
                 DeadlineAction.RESPONSE,
                 grouped[DeadlineAction.RESPONSE],
             )
+            effective_start = (
+                dl.date_start
+                if dl.date_start is not None or dl.has_conflict
+                else self.response_deadline
+            )
             effective_raw = dl.reference_raw or self.response_deadline_raw
             canonical[DeadlineAction.RESPONSE] = TriageDeadline(
                 action=DeadlineAction.RESPONSE,
-                date_start=dl.date_start,
+                date_start=effective_start,
                 date_end=dl.date_end,
                 reference_raw=effective_raw,
                 has_conflict=dl.has_conflict,
@@ -278,11 +294,21 @@ class TriageExtractedData(BaseModel):
                 DeadlineAction.DOCUMENT_AVAILABILITY,
                 grouped[DeadlineAction.DOCUMENT_AVAILABILITY],
             )
+            effective_start = (
+                dl.date_start
+                if dl.date_start is not None or dl.has_conflict
+                else self.document_availability_date_start
+            )
+            effective_end = (
+                dl.date_end
+                if dl.date_start is not None or dl.has_conflict
+                else self.document_availability_date_end
+            )
             effective_raw = dl.reference_raw or self.document_availability_raw
             canonical[DeadlineAction.DOCUMENT_AVAILABILITY] = TriageDeadline(
                 action=DeadlineAction.DOCUMENT_AVAILABILITY,
-                date_start=dl.date_start,
-                date_end=dl.date_end,
+                date_start=effective_start,
+                date_end=effective_end,
                 reference_raw=effective_raw,
                 has_conflict=dl.has_conflict,
                 conflict_description=dl.conflict_description,
@@ -294,6 +320,33 @@ class TriageExtractedData(BaseModel):
                 date_end=self.document_availability_date_end,
                 reference_raw=self.document_availability_raw,
             )
+
+        # Se `has_date_conflict=True` foi sinalizado sem prazo de entrega explícito:
+        # propaga para o único prazo presente (ex.: resposta ou documentos) ou cria
+        # registro de conflito caso não haja prazos.
+        if input_has_date_conflict and not any(
+            d.has_conflict for d in canonical.values()
+        ):
+            if len(canonical) == 1:
+                sole_action, sole_dl = next(iter(canonical.items()))
+                canonical[sole_action] = sole_dl.model_copy(
+                    update={
+                        "has_conflict": True,
+                        "conflict_description": (
+                            sole_dl.conflict_description
+                            or self.date_conflict_description
+                        ),
+                    }
+                )
+            else:
+                canonical[DeadlineAction.DELIVERY] = TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start=None,
+                    date_end=None,
+                    reference_raw=self.delivery_reference_raw,
+                    has_conflict=True,
+                    conflict_description=self.date_conflict_description,
+                )
 
         self.deadlines = [
             canonical[action]
@@ -308,12 +361,9 @@ class TriageExtractedData(BaseModel):
             self.delivery_date_start = delivery_dl.date_start
             self.delivery_date_end = delivery_dl.date_end
             self.delivery_reference_raw = delivery_dl.reference_raw
-            self.has_date_conflict = delivery_dl.has_conflict
-            self.date_conflict_description = delivery_dl.conflict_description
         else:
             self.delivery_date_start = None
             self.delivery_date_end = None
-            self.has_date_conflict = False
 
         response_dl = canonical.get(DeadlineAction.RESPONSE)
         if response_dl is not None:
@@ -330,6 +380,13 @@ class TriageExtractedData(BaseModel):
         else:
             self.document_availability_date_start = None
             self.document_availability_date_end = None
+
+        self.has_date_conflict = any(d.has_conflict for d in self.deadlines)
+        if self.has_date_conflict and not self.date_conflict_description:
+            self.date_conflict_description = next(
+                (d.conflict_description for d in self.deadlines if d.conflict_description),
+                None,
+            )
 
         return self
 

@@ -1075,8 +1075,36 @@ def test_deadlines_conflict_flags_propagate_bidirectionally_and_block_urgency_by
     )
     assert len(analysis_duplicate_conflict.extracted_data.deadlines) == 1
     assert analysis_duplicate_conflict.extracted_data.deadlines[0].has_conflict is True
+    assert analysis_duplicate_conflict.extracted_data.has_date_conflict is True
     assert analysis_duplicate_conflict.extracted_data.response_deadline is None
     assert analysis_duplicate_conflict.urgency == UrgencyLevel.UNDETERMINED
+
+    # Caso 5: has_date_conflict=True com único prazo de resposta (sem entrega) propaga
+    # conflito para esse prazo e impede classificação como Urgente
+    analysis_response_conflict = TriageAnalysis(
+        summary="Oferta com conflito no prazo de resposta.",
+        request_type=RequestType.OFFER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Retorno amanhã.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            response_deadline="2026-10-29",
+            has_date_conflict=True,
+            date_conflict_description="Conflito no prazo de resposta.",
+            deadlines=[
+                TriageDeadline(
+                    action=DeadlineAction.RESPONSE,
+                    date_start="2026-10-29",
+                    has_conflict=False,
+                )
+            ],
+        ),
+    )
+    assert analysis_response_conflict.extracted_data.has_date_conflict is True
+    assert analysis_response_conflict.extracted_data.deadlines[0].has_conflict is True
+    assert analysis_response_conflict.extracted_data.delivery_date_start is None
+    assert analysis_response_conflict.urgency == UrgencyLevel.UNDETERMINED
 
 
 def test_triage_schema_is_compatible_with_google_genai_transformer() -> None:
