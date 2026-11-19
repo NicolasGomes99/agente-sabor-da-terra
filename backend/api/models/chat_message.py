@@ -5,10 +5,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     DateTime,
+    Enum,
     ForeignKey,
     Integer,
     Text,
-    Enum,
     UniqueConstraint,
     Uuid,
 )
