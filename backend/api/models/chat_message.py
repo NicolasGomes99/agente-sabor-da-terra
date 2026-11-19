@@ -1,19 +1,25 @@
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    String,
     Text,
+    Enum,
     UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
+
+
+class ChatMessageRole(StrEnum):
+    USER = "USER"
+    AGENT = "AGENT"
 
 
 class ChatMessage(Base):
@@ -36,8 +42,10 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    role: Mapped[str] = mapped_column(
-        String(16), default="user", nullable=False
+    role: Mapped[ChatMessageRole] = mapped_column(
+        Enum(ChatMessageRole, name="chat_message_role", validate_strings=True),
+        default=ChatMessageRole.USER,
+        nullable=False,
     )
 
     content: Mapped[str] = mapped_column(
