@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ...config import PERNAMBUCO_TIMEZONE, to_pernambuco_date
 
@@ -10,6 +11,7 @@ class SourceKind(StrEnum):
     DOCUMENT_CHUNK = "trecho_documento"
     LOT_RECORD = "registro_lote"
     PRODUCER_RECORD = "registro_produtor"
+    FINANCIAL_RECORD = "registro_financeiro"
     OTHER_RECORD = "outro_registro"
 
 
@@ -45,8 +47,16 @@ class ConsultationSourceItem(BaseModel):
         default=None,
         description=(
             "Identificador de negócio do registro ou seção (ex.: 'LOT-2026-0094', "
-            "'ORG-PE-2025-003198', 'Cláusula 4')."
+            "'FIN-2026-006', 'ORG-PE-2025-003198', 'Cláusula 4')."
         ),
+    )
+    record_id: str | None = Field(
+        default=None,
+        description="Identificador da linha quando a fonte é um registro de CSV no RAG.",
+    )
+    record_fields: dict[str, Any] | None = Field(
+        default=None,
+        description="Campos consultáveis da linha do CSV indexada no RAG.",
     )
     content: str = Field(
         min_length=1,
@@ -60,6 +70,14 @@ class ConsultationSourceItem(BaseModel):
         if not stripped:
             raise ValueError("Field must not be blank.")
         return stripped
+
+    @model_validator(mode="after")
+    def _sync_record_id_and_reference_label(self) -> "ConsultationSourceItem":
+        if self.reference_label is None and self.record_id:
+            self.reference_label = self.record_id
+        elif self.record_id is None and self.reference_label:
+            self.record_id = self.reference_label
+        return self
 
 
 class ConsultationInput(BaseModel):
@@ -76,7 +94,33 @@ class ConsultationInput(BaseModel):
     )
     sources: list[ConsultationSourceItem] = Field(
         default_factory=list,
-        description="Trechos documentais e registros recuperados para a consulta.",
+        description="Trechos documentais e registros recuperados por busca para a consulta.",
+    )
+    financial_records: list[ConsultationSourceItem] | None = Field(
+        default=None,
+        description=(
+            "Coleção exaustiva de todos os registros de financeiro.csv indexados no RAG "
+            "para cálculos financeiros (independente da busca documental limitada por relevância)."
+        ),
+    )
+    producer_id: str | None = Field(
+        default=None,
+        description="Identificador ou nome do produtor quando a consulta solicita resumo financeiro.",
+    )
+    period_start: datetime | date | str | None = Field(
+        default=None,
+        description="Data inicial do período solicitado para o resumo financeiro.",
+    )
+    period_end: datetime | date | str | None = Field(
+        default=None,
+        description="Data final do período solicitado para o resumo financeiro.",
+    )
+    financial_reference_date: datetime | date | str | None = Field(
+        default=None,
+        description=(
+            "Data de referência específica para o cálculo financeiro quando distinta "
+            "da data da interação (`reference_date`)."
+        ),
     )
 
     @field_validator("question")
@@ -87,9 +131,14 @@ class ConsultationInput(BaseModel):
             raise ValueError("question must not be blank.")
         return stripped
 
-    @field_validator("reference_date")
+    @field_validator(
+        "reference_date",
+        "period_start",
+        "period_end",
+        "financial_reference_date",
+    )
     @classmethod
-    def _validate_reference_date(
+    def _validate_optional_dates(
         cls,
         value: datetime | date | str | None,
     ) -> datetime | date | str | None:
@@ -102,3 +151,9 @@ class ConsultationInput(BaseModel):
         if self.reference_date is not None:
             return to_pernambuco_date(self.reference_date)
         return datetime.now(PERNAMBUCO_TIMEZONE).date()
+
+    @property
+    def resolved_financial_reference_date(self) -> date | None:
+        if self.financial_reference_date is None:
+            return None
+        return to_pernambuco_date(self.financial_reference_date)

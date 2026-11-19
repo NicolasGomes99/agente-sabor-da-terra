@@ -23,6 +23,7 @@ from .config import PERNAMBUCO_TIMEZONE, get_agent_model
 from .consultation import (
     ConsultationInput,
     ConsultationResponse,
+    FinancialRecordsProvider,
     answer_document_consultation,
     create_consultation_agent,
 )
@@ -59,7 +60,7 @@ _ORCHESTRATOR_SYSTEM_PROMPT = f"""Você é o Agente Orquestrador do assistente i
 Sua função é coordenar o atendimento ao funcionário da cooperativa, mantendo o contexto da conversa atual e encaminhando cada solicitação ao agente especialista adequado:
 
 - `triage_agent`: quando o funcionário pedir para analisar ou triar uma mensagem recebida (pedido, cotação recebida de comprador, oferta de produtor ou comunicado) ou quando enviar esclarecimentos que atualizem uma triagem em andamento na sessão.
-- `consultation_agent`: quando o funcionário fizer perguntas diretas sobre o acervo documental e registros da cooperativa (certificações orgânicas, validade, produtos cobertos, rastreabilidade de lotes, contratos, sazonalidade ou preços).
+- `consultation_agent`: quando o funcionário fizer perguntas diretas sobre o acervo documental e registros da cooperativa (certificações orgânicas, validade, produtos cobertos, rastreabilidade de lotes, contratos, sazonalidade, preços ou resumos financeiros por produtor).
 
 {UNTRUSTED_DATA_NOTICE}
 
@@ -105,6 +106,7 @@ async def orchestrate_request(
     triage_runner: Runner | None = None,
     consultation_runner: Runner | None = None,
     router_runner: Runner | None = None,
+    financial_records_provider: FinancialRecordsProvider | None = None,
     model: str | None = None,
 ) -> OrchestratorResponse:
     """Ponto de entrada da aplicação para rotear e executar triagem ou consulta documental."""
@@ -162,9 +164,15 @@ async def orchestrate_request(
             question=enriched_question,
             reference_date=consultation_ref,
             sources=request.sources,
+            financial_records=request.financial_records,
+            producer_id=request.producer_id,
+            period_start=request.period_start,
+            period_end=request.period_end,
+            financial_reference_date=request.financial_reference_date,
         )
         result = await answer_document_consultation(
             consultation_input,
+            financial_records_provider=financial_records_provider,
             runner=consultation_runner,
             model=model,
         )
