@@ -28,12 +28,12 @@ const timestamp = '2026-11-17T12:00:00Z'
 export const sessionA = { id: 'session-a', title: 'Conversa A', created_at: timestamp }
 export const sessionB = { id: 'session-b', title: 'Conversa B', created_at: timestamp }
 export const sessionC = { id: 'session-c', title: 'Conversa C', created_at: timestamp }
-export const messageA = { id: 'message-a', role: 'user', content: 'Mensagem de A', position: 1, created_at: timestamp }
-export const messageB = { id: 'message-b', role: 'user', content: 'Mensagem de B', position: 1, created_at: timestamp }
+export const messageA = { id: 'message-a', role: 'user', content: 'Mensagem de A', position: 1, created_at: timestamp, citations: [] }
+export const messageB = { id: 'message-b', role: 'user', content: 'Mensagem de B', position: 1, created_at: timestamp, citations: [] }
 export const detailA = { ...sessionA, messages: [messageA] }
 export const detailB = { ...sessionB, messages: [messageB] }
-export const sentA = { ...messageA, id: 'sent-a', content: 'Novo envio de A', position: 2 }
-export const sentB = { ...messageB, id: 'sent-b', content: 'Novo envio de B', position: 2 }
+export const sentA = { ...messageA, id: 'sent-a', content: 'Novo envio de A', position: 2, citations: [] }
+export const sentB = { ...messageB, id: 'sent-b', content: 'Novo envio de B', position: 2, citations: [] }
 
 export function deferred<T>() {
   let resolve!: (value: T) => void
