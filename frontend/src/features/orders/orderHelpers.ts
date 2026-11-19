@@ -1,0 +1,58 @@
+import { ApiError } from '../../lib/api-client'
+import type { OrderRecord } from './ordersApi'
+
+export function formatDate(value: string): string {
+  const [year, month, day] = value.split('-')
+  return `${day}/${month}/${year}`
+}
+
+export function deliveryLabel(order: OrderRecord): string {
+  const start = formatDate(order.delivery_start_date)
+
+  if (
+    order.delivery_end_date &&
+    order.delivery_end_date !== order.delivery_start_date
+  ) {
+    return `${start} a ${formatDate(order.delivery_end_date)}`
+  }
+
+  return start
+}
+
+export function orderError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 404) {
+      return 'Pedido não encontrado. Ele pode estar indisponível.'
+    }
+
+    if (error.status === 409) {
+      return 'Este pedido foi cancelado e não pode ser editado.'
+    }
+
+    if (error.status === 422) {
+      return 'Confira os produtos, as quantidades, as unidades e o período de entrega antes de tentar novamente.'
+    }
+  }
+
+  return 'Não foi possível concluir a operação. Verifique sua conexão e tente novamente.'
+}
+
+export function itemsLabel(order: OrderRecord): string {
+  if (order.items.length > 0) {
+    return order.items
+      .map(
+        (item) =>
+          `${item.product.name}: ${item.quantity} ${item.unit}`,
+      )
+      .join(' · ')
+  }
+
+  return order.products || 'Itens pendentes de estruturação'
+}
+
+export function validQuantity(value: string): boolean {
+  return (
+    /^\d{1,15}(?:\.\d{1,3})?$/.test(value) &&
+    /[1-9]/.test(value)
+  )
+}

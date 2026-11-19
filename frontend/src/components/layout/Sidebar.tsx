@@ -4,7 +4,6 @@ import { useAuth } from '../../features/auth/useAuth'
 
 const navigationItems = [
   { label: 'Triagem', available: false },
-  { label: 'Pedidos', available: false },
   { label: 'Agendamentos', available: false },
 ]
 
@@ -39,6 +38,10 @@ export function Sidebar() {
         <NavLink className="sidebar-nav-item" to="/documents">
           <span aria-hidden="true">▤</span>
           Documentos
+        </NavLink>
+        <NavLink className="sidebar-nav-item" to="/orders">
+          <span aria-hidden="true">▤</span>
+          Pedidos
         </NavLink>
         {navigationItems.map((item) => (
           <button
