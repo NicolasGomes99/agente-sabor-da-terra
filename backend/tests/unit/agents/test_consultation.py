@@ -426,8 +426,10 @@ async def test_consultation_traces_lot_0094_and_flags_ambiguous_unit_in_lot_0099
 
 @pytest.mark.asyncio
 async def test_consultation_handles_empty_sources_without_inventing() -> None:
-    # Critério 2 da #37 (Consulta) + RF07: com lista de fontes vazia, retorna mensagem
-    # definida pelo código, indica dados insuficientes, sem citações e sem exibir conclusão simulada do modelo
+    # Critério 2 da #37 + revisão item 5 (Consulta) + RF07: com lista de fontes vazia,
+    # retorna imediatamente a mensagem definida pelo código independentemente do runner,
+    # não executa o modelo (nem falha se o runner falharia), indica dados insuficientes,
+    # retorna sem citações e não exibe conclusões simuladas
     from api.agents.consultation.reconciliation import (
         INSUFFICIENT_SOURCES_MESSAGE,
         build_insufficient_sources_message,
@@ -457,9 +459,19 @@ async def test_consultation_handles_empty_sources_without_inventing() -> None:
         "has_sufficient_data": True,
     }
 
+    class FailingRunner:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def run_async(self, *_args: Any, **_kwargs: Any) -> AsyncIterator[Any]:
+            self.called = True
+            raise RuntimeError("Runner não deveria ser executado sem fontes.")
+            yield  # pragma: no cover
+
     runner = FakeConsultationRunner(simulated_output)
     result = await answer_document_consultation(payload, runner=runner)
 
+    assert runner.last_prompt_text is None
     assert result.has_sufficient_data is False
     assert result.source_ids == []
     assert result.cited_sources == []
@@ -468,6 +480,26 @@ async def test_consultation_handles_empty_sources_without_inventing() -> None:
     assert "CONCLUSAO_SIMULADA_DO_MODELO" not in result.answer
     assert "INT-MARACUJA-999" not in result.answer
     assert any(g.kind == "lacuna" for g in result.gaps_and_divergences)
+
+    failing_runner = FailingRunner()
+    result_with_failing_runner = await answer_document_consultation(
+        payload,
+        runner=failing_runner,
+    )
+    assert failing_runner.called is False
+    assert result_with_failing_runner.answer == build_insufficient_sources_message("2026-10-30")
+    assert result_with_failing_runner.has_sufficient_data is False
+    assert result_with_failing_runner.cited_sources == []
+
+    # Reconciliação direta também descarta qualquer conclusão simulada quando sources=[]
+    direct_reconciled = reconcile_consultation_sources(
+        ConsultationResponse.model_validate(simulated_output),
+        payload,
+    )
+    assert direct_reconciled.answer == build_insufficient_sources_message("2026-10-30")
+    assert "CONCLUSAO_SIMULADA_DO_MODELO" not in direct_reconciled.answer
+    assert direct_reconciled.has_sufficient_data is False
+    assert direct_reconciled.cited_sources == []
 
 
 def test_consultation_schema_is_compatible_with_google_genai_transformer() -> None:

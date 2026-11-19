@@ -120,7 +120,7 @@ async def answer_document_consultation(
     runner: Runner | None = None,
     model: str | None = None,
 ) -> ConsultationResponse:
-    if not payload.sources and runner is None:
+    if not payload.sources:
         resolved_date_iso = payload.resolved_reference_date.isoformat()
         placeholder = ConsultationResponse(
             answer=build_insufficient_sources_message(resolved_date_iso),

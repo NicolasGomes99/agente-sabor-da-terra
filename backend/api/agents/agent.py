@@ -40,7 +40,11 @@ from .schemas import (
     OrchestratorRequest,
     OrchestratorResponse,
 )
-from .session import OrchestratorSessionStore, format_history_context
+from .session import (
+    OrchestratorSessionStore,
+    format_history_context,
+    is_new_triage_analysis,
+)
 from .triage import (
     TriageAnalysis,
     TriageInput,
@@ -122,9 +126,8 @@ async def orchestrate_request(
     history_context = format_history_context(prior_history)
 
     if selected_flow == "triage":
-        triage_received_ref = store.resolve_triage_received_at(
-            request.session_id,
-            request.received_at,
+        triage_received_ref, _ = store.resolve_triage_received_at(
+            request,
             prior_history,
         )
         triage_input = TriageInput(
@@ -141,27 +144,6 @@ async def orchestrate_request(
             runner=triage_runner,
             model=model,
         )
-        prior_triage = store.get_last_triage_analysis(request.session_id)
-        if (
-            prior_triage is not None
-            and triage_result.extracted_data.delivery_date_start is None
-            and not triage_result.extracted_data.has_date_conflict
-            and prior_triage.extracted_data.delivery_date_start is not None
-        ):
-            merged_data = triage_result.model_dump()
-            merged_data["extracted_data"]["delivery_date_start"] = (
-                prior_triage.extracted_data.delivery_date_start
-            )
-            if (
-                merged_data["extracted_data"].get("delivery_date_end") is None
-                and prior_triage.extracted_data.delivery_date_end is not None
-            ):
-                merged_data["extracted_data"]["delivery_date_end"] = (
-                    prior_triage.extracted_data.delivery_date_end
-                )
-            triage_result = TriageAnalysis.model_validate(merged_data)
-
-        store.set_last_triage_analysis(request.session_id, triage_result)
         result: TriageAnalysis | ConsultationResponse = triage_result
         selected_agent: Literal["triage_agent", "consultation_agent"] = "triage_agent"
         assistant_summary = triage_result.summary
@@ -197,6 +179,7 @@ async def orchestrate_request(
             content=request.message_text,
             flow=selected_flow,
             received_at=turn_received_at,
+            source_id=request.source_id,
         ),
     )
     store.append_turn(
@@ -206,6 +189,7 @@ async def orchestrate_request(
             content=assistant_summary,
             flow=selected_flow,
             received_at=turn_received_at,
+            source_id=request.source_id,
         ),
     )
 
@@ -235,6 +219,7 @@ __all__ = [
     "create_orchestrator_agent",
     "format_history_context",
     "infer_free_chat_flow",
+    "is_new_triage_analysis",
     "orchestrate_request",
     "orchestrator_agent",
     "root_agent",

@@ -38,7 +38,11 @@ class ConversationTurn(BaseModel):
     )
     received_at: datetime | date | str | None = Field(
         default=None,
-        description="Data/hora de recebimento associada à mensagem deste turno, quando aplicável.",
+        description="Data/hora de recebimento associada à mensagem em análise neste turno.",
+    )
+    source_id: str | None = Field(
+        default=None,
+        description="Identificador externo da mensagem em análise neste turno, quando houver.",
     )
 
     @field_validator("content")
@@ -68,7 +72,21 @@ class OrchestratorRequest(BaseModel):
     )
     received_at: datetime | date | str | None = Field(
         default=None,
-        description="Data/hora de recebimento da mensagem ou data de referência da consulta.",
+        description="Data/hora da mensagem ou da interação/consulta.",
+    )
+    message_received_at: datetime | date | str | None = Field(
+        default=None,
+        description=(
+            "Data/hora original de recebimento da mensagem em análise quando "
+            "informada separadamente da data da interação no chat."
+        ),
+    )
+    is_new_triage_message: bool | None = Field(
+        default=None,
+        description=(
+            "True quando o turno inicia a análise de uma nova mensagem recebida; "
+            "False quando dá continuidade à triagem atual; None para detecção automática."
+        ),
     )
     sender: str | None = Field(default=None)
     buyer_name: str | None = Field(default=None)

@@ -734,7 +734,10 @@ async def test_analyze_ped_2026_011_interprets_english_message_in_portuguese() -
 
 @pytest.mark.asyncio
 async def test_analyze_ped_2026_015_preserves_offer_and_additional_registration_intent() -> None:
-    # PED-2026-015: oferta de produtor acompanhada de solicitação de cadastro do vizinho (US02)
+    # Critério 2 da #37 (Triagem): PED-2026-015 recebido em 30/10/2026 identifica 'resposta'
+    # como ação e 31/10/2026 como prazo; delivery_date_start permanece ausente (None)
+    from api.agents.triage.schemas import DeadlineAction
+
     payload = TriageInput(
         source_id="PED-2026-015",
         received_at="2026-10-30T16:00:00",
@@ -765,7 +768,16 @@ async def test_analyze_ped_2026_015_preserves_offer_and_additional_registration_
         "received_date_reference": "2026-10-30",
         "extracted_data": {
             "buyer_name": "Cícero (Produtor P003)",
-            "delivery_date_start": "2026-10-31",
+            "delivery_date_start": None,
+            "response_deadline": "2026-10-31",
+            "response_deadline_raw": "até amanhã",
+            "deadlines": [
+                {
+                    "action": "resposta",
+                    "date_start": "2026-10-31",
+                    "reference_raw": "até amanhã",
+                }
+            ],
             "items": [
                 {"product": "Queijo coalho", "quantity": 200, "unit": "kg"},
                 {"product": "Manteiga", "quantity": 30, "unit": "kg"},
@@ -779,9 +791,144 @@ async def test_analyze_ped_2026_015_preserves_offer_and_additional_registration_
     result = await analyze_triage_message(payload, runner=runner)
 
     assert result.request_type == RequestType.OFFER
+    assert result.extracted_data.delivery_date_start is None
+    assert result.extracted_data.response_deadline == "2026-10-31"
     assert result.urgency == UrgencyLevel.URGENT
+    assert result.urgency_basis_action == DeadlineAction.RESPONSE
+    assert result.urgency_basis_date == "2026-10-31"
+    assert "resposta" in result.urgency_reason.lower()
+    assert "31/10/2026" in result.urgency_reason
+    assert "dia seguinte" in result.urgency_reason.lower()
     assert len(result.additional_intents) == 2
     assert any("cadastro" in intent.lower() for intent in result.additional_intents)
+
+
+@pytest.mark.asyncio
+async def test_analyze_ped_2026_014_document_availability_deadline_uses_first_day_of_inspection() -> None:
+    # Critério 3 da #37 (Triagem): PED-2026-014 recebido em 30/10/2026 identifica
+    # 'disponibilizacao_de_documentos' em 11/11/2026 (primeiro dia da inspeção),
+    # retorna Normal e mantém delivery_date_start ausente
+    from api.agents.triage.schemas import DeadlineAction
+
+    payload = TriageInput(
+        source_id="PED-2026-014",
+        received_at="2026-10-30T13:30:00",
+        channel="email",
+        sender="fiscalizacao@adagro.pe.gov.br",
+        buyer_name="ADAGRO - Agência de Defesa Agropecuária",
+        message_text=(
+            "NOTIFICAÇÃO: Informamos inspeção sanitária programada nos dias 11 e 12/11/2026. "
+            "Manter disponíveis as certificações orgânicas vigentes e o registro de "
+            "rastreabilidade dos últimos 3 lotes."
+        ),
+    )
+
+    simulated_model_output = {
+        "summary": "Notificação da ADAGRO sobre inspeção sanitária em 11 e 12/11/2026.",
+        "request_type": "comunicado",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "normal",
+        "urgency_reason": "Documentos exigidos para 11/11/2026.",
+        "received_date_reference": "2026-10-30",
+        "extracted_data": {
+            "buyer_name": "ADAGRO - Agência de Defesa Agropecuária",
+            "delivery_date_start": None,
+            "document_availability_date_start": "2026-11-11",
+            "document_availability_date_end": "2026-11-12",
+            "document_availability_raw": "dias 11 e 12/11/2026",
+            "requested_documents_or_sensitive_data": [
+                "Certificações orgânicas vigentes",
+                "Registro de rastreabilidade dos últimos 3 lotes",
+            ],
+        },
+        "pending_items": [],
+        "requires_clarification": True,
+    }
+
+    runner = FakeRunner(simulated_model_output)
+    result = await analyze_triage_message(payload, runner=runner)
+
+    assert result.request_type == RequestType.NOTICE
+    assert result.extracted_data.delivery_date_start is None
+    assert result.extracted_data.document_availability_date_start == "2026-11-11"
+    assert result.extracted_data.document_availability_date_end == "2026-11-12"
+    assert result.urgency == UrgencyLevel.NORMAL
+    assert result.urgency_basis_action == DeadlineAction.DOCUMENT_AVAILABILITY
+    assert result.urgency_basis_date == "2026-11-11"
+    assert "disponibilização de documentos" in result.urgency_reason.lower()
+    assert "11/11/2026" in result.urgency_reason
+    assert "posterior ao dia seguinte" in result.urgency_reason.lower()
+
+
+def test_multiple_deadlines_uses_earliest_valid_action_and_ignores_past_or_conflicting_dates() -> None:
+    # Critério 4 da #37 (Triagem) + revisão item 1 e 2: entrega em 7 dias + resposta amanhã -> Urgente por resposta
+    from api.agents.triage.schemas import (
+        DeadlineAction,
+        TriageDeadline,
+        evaluate_urgency,
+    )
+
+    decision = evaluate_urgency(
+        received_date=date(2026, 10, 28),
+        delivery_date_start=date(2026, 11, 4),
+        declared_urgency=False,
+        response_deadline=date(2026, 10, 29),
+    )
+    assert decision.level == UrgencyLevel.URGENT
+    assert decision.basis_action == DeadlineAction.RESPONSE
+    assert decision.basis_date == date(2026, 10, 29)
+    assert "resposta" in decision.reason.lower()
+    assert "29/10/2026" in decision.reason
+
+    # Prazo de entrega anterior ao recebimento (inconsistente) é desconsiderado e sinalizado;
+    # prazo válido de disponibilização de documentos posterior ao dia seguinte define urgência Normal
+    analysis = TriageAnalysis(
+        summary="Solicitação com prazo de entrega passado e documentos para 05/11/2026.",
+        request_type=RequestType.ORDER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Entrega passada.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            deadlines=[
+                TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start="2026-10-25",
+                ),
+                TriageDeadline(
+                    action=DeadlineAction.DOCUMENT_AVAILABILITY,
+                    date_start="2026-11-05",
+                ),
+            ]
+        ),
+    )
+    assert analysis.urgency == UrgencyLevel.NORMAL
+    assert analysis.urgency_basis_action == DeadlineAction.DOCUMENT_AVAILABILITY
+    assert analysis.urgency_basis_date == "2026-11-05"
+    assert "disponibilização de documentos" in analysis.urgency_reason.lower()
+    assert "05/11/2026" in analysis.urgency_reason
+    assert any("2026-10-25" in p.description for p in analysis.pending_items)
+
+
+def test_triage_analysis_replaces_inconsistent_model_urgency_reason() -> None:
+    # Revisão item 6: urgência declarada com entrega em 10 dias não pode manter motivo
+    # incorreto do modelo afirmando que a entrega ocorrerá amanhã
+    analysis = TriageAnalysis(
+        summary="Pedido urgente com entrega em 10 dias.",
+        request_type=RequestType.ORDER,
+        declared_urgency=True,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Urgente porque a entrega ocorrerá amanhã.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(delivery_date_start="2026-11-07"),
+    )
+    assert analysis.urgency == UrgencyLevel.URGENT
+    assert analysis.urgency_basis_action is None
+    assert analysis.urgency_basis_date is None
+    assert "amanhã" not in analysis.urgency_reason.lower()
+    assert "urgência declarada" in analysis.urgency_reason.lower()
+    assert "remetente" in analysis.urgency_reason.lower()
 
 
 def test_triage_schema_is_compatible_with_google_genai_transformer() -> None:

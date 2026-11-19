@@ -24,7 +24,9 @@ A aplicação backend (rotas FastAPI de chat e fila de triagem) utiliza **`orche
 | `session_id` | `str` | Identificador único da sessão de conversa. |
 | `message_text` | `str` | Texto enviado pelo funcionário no chat ou mensagem da fila de triagem. |
 | `flow` | `OrchestratorFlow` (`"auto"`, `"triage"`, `"consultation"`) | `"auto"` (padrão) usa o classificador semântico no chat livre com fallback heurístico; `"triage"` e `"consultation"` acionam diretamente o especialista indicado pelo backend. |
-| `received_at` | `datetime \| date \| str \| None` | Data/hora de recebimento da mensagem ou data de referência da consulta. Na retomada de uma sessão de triagem, a data original da mensagem em análise é preservada. |
+| `received_at` | `datetime \| date \| str \| None` | Data/hora da mensagem ou da interação/consulta. Na continuação de uma triagem em andamento, a data da mensagem em análise é preservada; ao iniciar a análise de uma nova mensagem na mesma sessão, a referência temporal é atualizada para a nova mensagem. |
+| `message_received_at` | `datetime \| date \| str \| None` | Data/hora original de recebimento da mensagem em análise quando informada separadamente da data da interação no chat. |
+| `is_new_triage_message` | `bool \| None` | Indica explicitamente se o turno inicia uma nova análise (`True`) ou continua a análise atual (`False`); quando `None`, o orquestrador detecta automaticamente por `source_id`, `message_received_at` ou intenção do texto. |
 | `sender`, `buyer_name`, `channel`, `source_id` | `str \| None` | Metadados opcionais do canal de entrada para a triagem. |
 | `sources` | `list[ConsultationSourceItem]` | Trechos documentais (`DocumentChunk`) e registros recuperados para consultas documentais. |
 | `history` | `list[ConversationTurn]` | Histórico prévio da sessão aberta, enviado em bloco separado do texto da mensagem em análise. |

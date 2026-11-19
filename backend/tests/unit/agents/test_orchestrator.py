@@ -544,7 +544,7 @@ async def test_resumed_triage_on_2026_10_30_from_2026_10_28_separates_history_an
         "received_date_reference": "2026-10-28",
         "extracted_data": {
             "buyer_name": "Restaurante Raízes",
-            "delivery_date_start": None,
+            "delivery_date_start": "2026-10-29",
             "delivery_reference_raw": "amanhã",
             "has_date_conflict": False,
             "items": [
@@ -643,6 +643,199 @@ async def test_resumed_triage_on_2026_10_30_from_2026_10_28_separates_history_an
     assert received_block.strip() == f"{clarification_text}\n</mensagem_recebida>"
     assert "<historico_sessao_atual>" not in received_block
     assert format_history_context([]) == ""
+
+
+@pytest.mark.asyncio
+async def test_resumed_triage_with_fresh_store_and_request_history_and_cancelled_deadline_not_restored() -> None:
+    # Revisão item 4: (a) retomada usando uma NOVA instância de OrchestratorSessionStore
+    # (session_store=None) com history fornecido na requisição mantém a data original 28/10/2026
+    # e histórico separado; (b) quando o funcionário informa que o prazo original foi cancelado
+    # e o agente retorna delivery_date_start=None, o orquestrador NÃO restaura a data antiga.
+    triage_payload_turn1 = {
+        "summary": "Pedido de 15 kg de queijo coalho para amanhã (29/10/2026).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 29/10/2026.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "buyer_name": "Restaurante Raízes",
+            "delivery_date_start": "2026-10-29",
+            "delivery_reference_raw": "amanhã",
+            "items": [{"product": "Queijo coalho", "quantity": 15, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    resp_turn1 = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            flow=OrchestratorFlow.TRIAGE,
+            received_at="2026-10-28T09:15:00",
+            message_text="Preciso pra amanhã de 15kg de queijo coalho.",
+        ),
+        triage_runner=FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload_turn1),
+    )
+
+    # Retomada em 30/10/2026 sem reutilizar session_store (nova instância por padrão),
+    # passando apenas history=resp_turn1.session_history
+    triage_payload_preserved = {
+        **triage_payload_turn1,
+        "summary": "Pedido de 15 kg de queijo coalho confirmado para 29/10/2026 na Rua Nova.",
+    }
+    triage_runner_fresh = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, triage_payload_preserved)
+    resp_fresh = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            received_at="2026-10-30T11:00:00",
+            message_text="O comprador confirmou entrega na Rua Nova.",
+            history=resp_turn1.session_history,
+        ),
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Esclarecimento da triagem em andamento."},
+        ),
+        triage_runner=triage_runner_fresh,
+    )
+    assert isinstance(resp_fresh.result, TriageAnalysis)
+    assert resp_fresh.result.received_date_reference == "2026-10-28"
+    assert resp_fresh.result.extracted_data.delivery_date_start == "2026-10-29"
+    assert resp_fresh.result.urgency == UrgencyLevel.URGENT
+    fresh_prompt = triage_runner_fresh.received_prompts[0]
+    assert "data_recebimento_referencia: 2026-10-28 (quarta-feira)" in fresh_prompt
+    assert "<historico_sessao_atual>" in fresh_prompt
+    assert "<historico_sessao_atual>" not in fresh_prompt.split("<mensagem_recebida>", maxsplit=1)[1]
+
+    # Agora o funcionário informa que o comprador cancelou o prazo original -> data nula NÃO deve ser restaurada
+    triage_payload_cancelled_date = {
+        "summary": "Pedido de 15 kg de queijo coalho sem prazo definido após cancelamento da data original.",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "indeterminada",
+        "urgency_reason": "Sem prazo definido após cancelamento da data original.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "buyer_name": "Restaurante Raízes",
+            "delivery_date_start": None,
+            "has_date_conflict": False,
+            "items": [{"product": "Queijo coalho", "quantity": 15, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": True,
+    }
+    resp_cancelled = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="stateless-session",
+            received_at="2026-10-30T15:00:00",
+            message_text="O comprador cancelou o prazo original e ainda vai definir uma nova data.",
+            history=resp_fresh.session_history,
+        ),
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Atualização de prazo na triagem."},
+        ),
+        triage_runner=FakeSpecialistRunner(
+            TRIAGE_OUTPUT_KEY,
+            triage_payload_cancelled_date,
+        ),
+    )
+    assert isinstance(resp_cancelled.result, TriageAnalysis)
+    assert resp_cancelled.result.extracted_data.delivery_date_start is None
+    assert resp_cancelled.result.urgency == UrgencyLevel.UNDETERMINED
+
+
+@pytest.mark.asyncio
+async def test_new_triage_message_in_same_session_updates_received_date_reference() -> None:
+    # Revisão item 3: após analisar mensagem recebida em 28/10/2026, ao pedir na mesma
+    # conversa a análise de OUTRA mensagem recebida em 02/11/2026, o agente deve usar
+    # 02/11/2026 (e não 28/10/2026) como referência temporal, e preservar 02/11/2026
+    # em esclarecimentos subsequentes dessa nova mensagem.
+    store = OrchestratorSessionStore()
+
+    first_msg_payload = {
+        "summary": "Primeiro pedido (28/10) de queijo coalho para amanhã (29/10).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 29/10/2026.",
+        "received_date_reference": "2026-10-28",
+        "extracted_data": {
+            "delivery_date_start": "2026-10-29",
+            "items": [{"product": "Queijo coalho", "quantity": 10, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            flow=OrchestratorFlow.TRIAGE,
+            source_id="PED-100",
+            received_at="2026-10-28T09:00:00",
+            message_text="Preciso pra amanhã de 10kg de queijo coalho.",
+        ),
+        session_store=store,
+        triage_runner=FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, first_msg_payload),
+    )
+
+    second_msg_payload = {
+        "summary": "Novo pedido (02/11) de 20 kg de macaxeira para amanhã (03/11).",
+        "request_type": "pedido",
+        "additional_intents": [],
+        "declared_urgency": False,
+        "urgency": "urgente",
+        "urgency_reason": "Entrega em 03/11/2026.",
+        "received_date_reference": "2026-11-02",
+        "extracted_data": {
+            "delivery_date_start": "2026-11-03",
+            "items": [{"product": "Macaxeira", "quantity": 20, "unit": "kg"}],
+        },
+        "pending_items": [],
+        "requires_clarification": False,
+    }
+    second_triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, second_msg_payload)
+    resp_second = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            received_at="2026-11-02T10:00:00",
+            message_text="Analise esta nova mensagem recebida: preciso pra amanhã de 20kg de macaxeira.",
+        ),
+        session_store=store,
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Nova mensagem para triagem."},
+        ),
+        triage_runner=second_triage_runner,
+    )
+
+    assert isinstance(resp_second.result, TriageAnalysis)
+    assert resp_second.result.received_date_reference == "2026-11-02"
+    assert resp_second.result.extracted_data.delivery_date_start == "2026-11-03"
+    second_prompt = second_triage_runner.received_prompts[0]
+    assert "data_recebimento_referencia: 2026-11-02 (segunda-feira)" in second_prompt
+    assert "- 2026-11-03 (terça-feira) — dia seguinte ao recebimento (amanhã)" in second_prompt
+
+    # Esclarecimento da segunda mensagem em 04/11 preserva 02/11 (não volta para 28/10 nem vai para 04/11)
+    third_triage_runner = FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, second_msg_payload)
+    resp_third = await orchestrate_request(
+        OrchestratorRequest(
+            session_id="multi-msg-session",
+            received_at="2026-11-04T08:30:00",
+            message_text="O comprador confirmou retirada na feira.",
+        ),
+        session_store=store,
+        router_runner=FakeSpecialistRunner(
+            ROUTER_OUTPUT_KEY,
+            {"target_flow": "triage", "reason": "Continuação da triagem atual."},
+        ),
+        triage_runner=third_triage_runner,
+    )
+    assert isinstance(resp_third.result, TriageAnalysis)
+    assert resp_third.result.received_date_reference == "2026-11-02"
+    assert "data_recebimento_referencia: 2026-11-02 (segunda-feira)" in third_triage_runner.received_prompts[0]
 
 
 def test_orchestrator_schema_is_compatible_with_google_genai_transformer() -> None:
