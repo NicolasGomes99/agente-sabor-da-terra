@@ -103,13 +103,7 @@ class TriageAnalysis(BaseModel):
     def _enforce_business_rules(self) -> "TriageAnalysis":
         decision = evaluate_urgency(
             received_date=self.received_date,
-            delivery_date_start=self.extracted_data.delivery_start_as_date,
             declared_urgency=self.declared_urgency,
-            has_date_conflict=self.extracted_data.has_date_conflict,
-            response_deadline=self.extracted_data.response_deadline_as_date,
-            document_availability_date_start=(
-                self.extracted_data.document_availability_start_as_date
-            ),
             deadlines=self.extracted_data.deadlines,
         )
         self.urgency = decision.level

@@ -77,7 +77,13 @@ def _collect_deadlines(
     document_availability_date_start: date | None,
     deadlines: Sequence[TriageDeadline] | None,
 ) -> list[TriageDeadline]:
-    collected: list[TriageDeadline] = list(deadlines or [])
+    collected: list[TriageDeadline] = []
+    for item in deadlines or []:
+        if item.action == DeadlineAction.DELIVERY and has_date_conflict and not item.has_conflict:
+            collected.append(item.model_copy(update={"has_conflict": True}))
+        else:
+            collected.append(item)
+
     present_actions = {d.action for d in collected}
 
     if (

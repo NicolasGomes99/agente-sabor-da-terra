@@ -931,6 +931,154 @@ def test_triage_analysis_replaces_inconsistent_model_urgency_reason() -> None:
     assert "remetente" in analysis.urgency_reason.lower()
 
 
+def test_deadlines_single_source_of_truth_reconciles_divergent_scalar_and_list_dates() -> None:
+    # Regressão da 2ª revisão do PR #45: divergência entre campos individuais e lista `deadlines`
+    # é resolvida usando `deadlines` como fonte de verdade e sincronizando os campos individuais
+    from api.agents.triage.schemas import DeadlineAction, TriageDeadline
+
+    analysis = TriageAnalysis(
+        summary="Solicitação com divergência entre response_deadline e lista deadlines.",
+        request_type=RequestType.OFFER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.NORMAL,
+        urgency_reason="Prazo em novembro.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            response_deadline="2026-11-07",
+            delivery_date_start="2026-11-04",
+            delivery_date_end="2026-11-08",
+            document_availability_date_start="2026-11-20",
+            deadlines=[
+                TriageDeadline(
+                    action=DeadlineAction.RESPONSE,
+                    date_start="2026-10-29",
+                    reference_raw="até amanhã",
+                ),
+                TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start="2026-11-05",
+                    date_end=None,
+                ),
+                TriageDeadline(
+                    action=DeadlineAction.DOCUMENT_AVAILABILITY,
+                    date_start="2026-11-11",
+                    date_end="2026-11-12",
+                ),
+            ],
+        ),
+    )
+
+    assert analysis.extracted_data.response_deadline == "2026-10-29"
+    assert analysis.extracted_data.delivery_date_start == "2026-11-05"
+    assert analysis.extracted_data.delivery_date_end is None
+    assert analysis.extracted_data.document_availability_date_start == "2026-11-11"
+    assert analysis.extracted_data.document_availability_date_end == "2026-11-12"
+    assert analysis.urgency == UrgencyLevel.URGENT
+    assert analysis.urgency_basis_action == DeadlineAction.RESPONSE
+    assert analysis.urgency_basis_date == "2026-10-29"
+    assert "29/10/2026" in analysis.urgency_reason
+
+
+def test_deadlines_conflict_flags_propagate_bidirectionally_and_block_urgency_by_deadline() -> None:
+    # Regressão da 2ª revisão do PR #45: divergência entre has_date_conflict e has_conflict
+    # propaga o conflito nos dois sentidos e impede que o prazo conflitante classifique urgência
+    from api.agents.triage.schemas import (
+        DeadlineAction,
+        TriageDeadline,
+        evaluate_urgency,
+    )
+
+    # Caso 1: has_date_conflict=True no campo individual e has_conflict=False em deadlines
+    analysis_scalar_conflict = TriageAnalysis(
+        summary="Pedido com conflito sinalizado em has_date_conflict.",
+        request_type=RequestType.ORDER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Entrega amanhã.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            delivery_date_start="2026-10-29",
+            has_date_conflict=True,
+            date_conflict_description="Conflito entre dia da semana e data explícita.",
+            deadlines=[
+                TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start="2026-10-29",
+                    has_conflict=False,
+                )
+            ],
+        ),
+    )
+    assert analysis_scalar_conflict.extracted_data.has_date_conflict is True
+    assert analysis_scalar_conflict.extracted_data.deadlines[0].has_conflict is True
+    assert analysis_scalar_conflict.urgency == UrgencyLevel.UNDETERMINED
+    assert analysis_scalar_conflict.urgency_basis_action is None
+    assert analysis_scalar_conflict.urgency_basis_date is None
+    assert PendingCategory.DATE_CONFLICT in {
+        p.category for p in analysis_scalar_conflict.pending_items
+    }
+
+    # Caso 2: has_date_conflict=False no campo individual e has_conflict=True em deadlines
+    analysis_list_conflict = TriageAnalysis(
+        summary="Pedido com conflito sinalizado em deadlines.",
+        request_type=RequestType.ORDER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Entrega amanhã.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            delivery_date_start="2026-10-29",
+            has_date_conflict=False,
+            deadlines=[
+                TriageDeadline(
+                    action=DeadlineAction.DELIVERY,
+                    date_start="2026-10-29",
+                    has_conflict=True,
+                    conflict_description="Sexta-feira não coincide com a data citada.",
+                )
+            ],
+        ),
+    )
+    assert analysis_list_conflict.extracted_data.has_date_conflict is True
+    assert analysis_list_conflict.extracted_data.deadlines[0].has_conflict is True
+    assert analysis_list_conflict.urgency == UrgencyLevel.UNDETERMINED
+
+    # Caso 3: chamada direta a evaluate_urgency também propaga has_date_conflict=True
+    direct_decision = evaluate_urgency(
+        received_date=date(2026, 10, 28),
+        has_date_conflict=True,
+        deadlines=[
+            TriageDeadline(
+                action=DeadlineAction.DELIVERY,
+                date_start="2026-10-29",
+                has_conflict=False,
+            )
+        ],
+    )
+    assert direct_decision.level == UrgencyLevel.UNDETERMINED
+    assert direct_decision.basis_action is None
+
+    # Caso 4: entradas duplicadas e divergentes para a mesma ação em deadlines viram conflito
+    analysis_duplicate_conflict = TriageAnalysis(
+        summary="Mensagem com duas datas divergentes para resposta em deadlines.",
+        request_type=RequestType.CONSULTATION,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Retorno amanhã.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(
+            deadlines=[
+                TriageDeadline(action=DeadlineAction.RESPONSE, date_start="2026-10-29"),
+                TriageDeadline(action=DeadlineAction.RESPONSE, date_start="2026-11-07"),
+            ]
+        ),
+    )
+    assert len(analysis_duplicate_conflict.extracted_data.deadlines) == 1
+    assert analysis_duplicate_conflict.extracted_data.deadlines[0].has_conflict is True
+    assert analysis_duplicate_conflict.extracted_data.response_deadline is None
+    assert analysis_duplicate_conflict.urgency == UrgencyLevel.UNDETERMINED
+
+
 def test_triage_schema_is_compatible_with_google_genai_transformer() -> None:
     from google.genai._transformers import t_schema
 
