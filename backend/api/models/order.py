@@ -1,0 +1,72 @@
+from datetime import date
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    String,
+    Uuid,
+    false,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .base import Base
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    __table_args__ = (
+        CheckConstraint(
+            "delivery_end_date IS NULL "
+            "OR delivery_end_date >= delivery_start_date",
+            name="ck_orders_delivery_dates",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        default=uuid4,
+    )
+
+    session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+
+    buyer: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    products: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    conditions: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+    )
+
+    delivery_start_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    delivery_end_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+
+    cancelled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )

@@ -49,10 +49,6 @@
       return [];
     }
 
-    function legacyScheduleHasProduct(schedule, record) {
-      return typeof schedule.items === "string" && schedule.items.split("\n").some((line) => line.split("•")[0].trim() === record.name);
-    }
-
     function documentLinks(record) {
       const ids = [record.id, citationId(record.id), ...(record.versions || []).map((version) => version.id)];
       return state.conversations.filter((conversation) => conversation.messages.some((message) => ids.includes(message.citation)))
@@ -68,10 +64,8 @@
           .map((order) => `Alocação no pedido ${order.id}`);
       }
       if (key === "products") {
-        const inOrders = state.orders.filter((order) => productItems(order, record).length);
-        const inSchedules = state.schedules.filter((schedule) => productItems(schedule, record).length ||
-          (typeof schedule.items === "string" && ((schedule.productIds || []).includes(record.id) || legacyScheduleHasProduct(schedule, record))));
-        links = [...inOrders.map((order) => `Item do pedido ${order.id}`), ...inSchedules.map((schedule) => `Item do agendamento ${schedule.id}`)];
+        links = state.orders.filter((order) => productItems(order, record).length)
+          .map((order) => `Item do pedido ${order.id}`);
       }
       if (record.linked && !links.length) links.push("Vínculo registrado na base de demonstração");
       return links;
@@ -97,10 +91,10 @@
       }[key];
       const rows = records().map((record) => {
         const detail = record.city || record.unit || record.kind;
-        const status = key === "products" ? esc(record.season || "—") : badge(record.status || "Disponível");
+        const status = key === "products" ? esc(record.season || "-") : badge(record.status || "Disponível");
         return `<tr>
           <td><strong>${esc(record.name)}</strong><span class="registry-id">${esc(record.id)}</span></td>
-          <td>${esc(detail || "—")}</td><td>${status}</td>
+          <td>${esc(detail || "-")}</td><td>${status}</td>
           <td class="registry-table-action">${actionButton("detail", "Abrir", { id: record.id, tone: "small", glyph: "arrow-right" })}</td>
         </tr>`;
       }).join("");
@@ -140,7 +134,7 @@
         ${breadcrumbs(record)}
         <header class="page-heading"><div><h1>${esc(record.name)}</h1><p>${esc(record.id)}</p></div><div class="actions">${actionButton("edit", "Editar cadastro", { id: record.id, glyph: "edit", tone: "primary" })}</div></header>
         <div class="registry-detail-grid"><div class="registry-detail-main">
-          <section class="card registry-section"><h2>Dados do cadastro</h2><dl class="registry-details">${fieldsFor(record).map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value || "—")}</dd></div>`).join("")}</dl></section>
+          <section class="card registry-section"><h2>Dados do cadastro</h2><dl class="registry-details">${fieldsFor(record).map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value || "-")}</dd></div>`).join("")}</dl></section>
           ${isDocument ? documentVersions(record) : ""}
         </div><aside class="card registry-section registry-links">
           <h2>Vínculos</h2>${links.length ? `<ul>${links.map((link) => `<li>${esc(link)}</li>`).join("")}</ul><p>Exclusão bloqueada pelos vínculos acima.</p>` : `<p>Este cadastro pode ser excluído.</p>${actionButton("delete", "Excluir cadastro", { id: record.id, tone: "danger" })}`}
@@ -257,11 +251,8 @@
           .map((allocation) => [allocation, "producerId", record.id]);
       }
       if (group().key === "products") {
-        const itemReferences = [...state.orders, ...state.schedules].flatMap((entry) => productItems(entry, record)).filter((item) => !item.productId)
+        return state.orders.flatMap((order) => productItems(order, record)).filter((item) => !item.productId)
           .map((item) => [item, "productId", record.id]);
-        const legacyReferences = state.schedules.filter((schedule) => legacyScheduleHasProduct(schedule, record) && !(schedule.productIds || []).includes(record.id))
-          .map((schedule) => [schedule, "productIds", [...(schedule.productIds || []), record.id]]);
-        return [...itemReferences, ...legacyReferences];
       }
       return state.conversations.flatMap((conversation) => conversation.messages.filter((message) => message.citation === record.id))
         .map((message) => [message, "citation", citationId(record.id)]);

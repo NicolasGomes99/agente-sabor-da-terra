@@ -3,6 +3,10 @@ from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .citation import Citation
 from .document import Document, DocumentChunk
+from .order import Order
+from .producer import Producer
+from .producer_product import ProducerProduct
+from .product import Product
 from .user import User
 
 __all__ = [
@@ -12,5 +16,9 @@ __all__ = [
     "Citation",
     "Document",
     "DocumentChunk",
+    "Order",
+    "Producer",
+    "ProducerProduct",
+    "Product",
     "User",
 ]

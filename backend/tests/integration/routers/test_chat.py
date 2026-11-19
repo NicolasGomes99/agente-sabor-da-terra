@@ -1,14 +1,17 @@
 from collections.abc import AsyncIterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api import database
 from api.app import fastapi_app as app
 from api.database import get_db
+from api.models.chat_message import ChatMessageRole
+from api.repositories.chat import ChatRepository
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
@@ -77,6 +80,11 @@ async def test_create_session_and_register_message(
     )
     assert sent.status_code == 201
     assert sent.json()["content"] == "Quais pedidos estão pendentes?"
+    assert sent.json()["role"] == "user"
+    assert await db_session.scalar(
+        text("SELECT role FROM chat_messages WHERE id = :id"),
+        {"id": UUID(sent.json()["id"])},
+    ) == "USER"
 
 
 @pytest.mark.asyncio
@@ -86,12 +94,15 @@ async def test_reopen_session_returns_messages_in_order(
     headers = await create_user_headers(db_session)
     session_id = (await client.post("/chat/sessions", headers=headers)).json()["id"]
 
-    for text in ["primeira", "segunda", "terceira"]:
+    for content in ["primeira", "segunda"]:
         await client.post(
             f"/chat/sessions/{session_id}/messages",
             headers=headers,
-            json={"content": text},
+            json={"content": content},
         )
+    await ChatRepository(db_session).add_message(
+        UUID(session_id), "terceira", role=ChatMessageRole.AGENT
+    )
 
     response = await client.get(f"/chat/sessions/{session_id}", headers=headers)
 
@@ -101,6 +112,7 @@ async def test_reopen_session_returns_messages_in_order(
     positions = [m["position"] for m in messages]
     assert contents == ["primeira", "segunda", "terceira"]
     assert positions == [1, 2, 3]
+    assert [message["role"] for message in messages] == ["user", "user", "assistant"]
 
 
 @pytest.mark.asyncio

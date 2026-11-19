@@ -1,0 +1,58 @@
+.producer-detail-page {
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 2rem);
+}
+
+.producer-detail-section-label {
+  margin-bottom: 0.25rem;
+  color: var(--color-text-muted);
+}
+
+.producer-detail-back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+.producer-detail-retry {
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-primary-dark);
+}
+
+.producer-detail-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.producer-detail-sections section {
+  padding: 1rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.producer-detail-sections dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0;
+}
+
+.producer-detail-sections dt {
+  color: var(--color-text-muted);
+}
+
+.producer-detail-sections dd,
+.producer-detail-sections ul,
+.producer-detail-sections p {
+  margin: 0;
+}

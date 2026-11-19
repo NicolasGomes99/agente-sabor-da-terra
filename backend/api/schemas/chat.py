@@ -2,7 +2,16 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
+
+from ..models.chat_message import ChatMessageRole
 
 
 class MessageCreate(BaseModel):
@@ -52,6 +61,13 @@ class MessageOut(BaseModel):
     role: str
     content: str
     created_at: datetime
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def serialize_role(cls, role: str) -> str:
+        return {ChatMessageRole.USER: "user", ChatMessageRole.AGENT: "assistant"}.get(
+            role, role
+        )
 
 
 class SessionOut(BaseModel):

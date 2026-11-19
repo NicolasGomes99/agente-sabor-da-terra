@@ -1,8 +1,17 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
-from sqlalchemy import Integer, UniqueConstraint
-from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
+
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -11,13 +20,21 @@ if TYPE_CHECKING:
     from .citation import Citation
 
 
+class ChatMessageRole(StrEnum):
+    USER = "USER"
+    AGENT = "AGENT"
+
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
         UniqueConstraint(
-            "session_id", "position", name="uq_chat_messages_session_position"
+            "session_id",
+            "position",
+            name="uq_chat_messages_session_position",
         ),
     )
+
     id: Mapped[UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid4
     )
@@ -28,12 +45,18 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    role: Mapped[str] = mapped_column(
-        String(16), default="user", nullable=False
+    role: Mapped[ChatMessageRole] = mapped_column(
+        Enum(ChatMessageRole, name="chat_message_role", validate_strings=True),
+        default=ChatMessageRole.USER,
+        nullable=False,
     )
 
     content: Mapped[str] = mapped_column(
         Text, nullable=False
+    )
+
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -46,4 +69,3 @@ class ChatMessage(Base):
         back_populates="message",
         cascade="all, delete-orphan",
     )
-    position: Mapped[int] = mapped_column(Integer)
