@@ -4,7 +4,7 @@ Este pacote implementa a camada multiagente da Cooperativa Sabor da Terra com Go
 
 ## Ponto de Entrada da Aplicação
 
-A aplicação backend (rotas FastAPI de chat e fila de triagem) utiliza **`orchestrate_request`** como ponto de entrada oficial.
+A função assíncrona **`orchestrate_request`** é o ponto de entrada oficial disponibilizado pela camada de agentes para integração com os serviços de chat e de processamento da triagem. A integração com esses serviços ainda será implementada.
 
 - **Caminho de importação principal:**
   ```python
