@@ -71,4 +71,4 @@ A aplicação importa cada linha de `lotes.csv` como um fornecimento confirmado 
 
 A carga usa a unidade indicada no registro ou nas observações, como nas 300 unidades de alface e nos 150 maços de coentro. No caso de "40 maços (kg)", a descrição fica disponível no CSV, a unidade fica vazia e a aplicação apresenta a pendência ao funcionário. A quantidade fica fora dos totais e das conversões até o esclarecimento. Se a fonte não informar a confirmação de disponibilidade, `disponibilidade_conf` fica vazio.
 
-O controle persistente de importação associa o UUID interno de `Lote` ao `lote_id` de `lotes.csv`. Esse vínculo permite localizar a linha de origem e reconhecer o lote ao repetir a carga. A aplicação reaproveita o registro existente com o mesmo UUID, preserva os esclarecimentos já registrados e respeita as exclusões permitidas pela aplicação.
+A carga inicial é executada por comando explícito durante a preparação do ambiente. Os dados complementares dos Lotes históricos permanecem no arquivo de origem e são disponibilizados para consulta por meio da indexação documental.
