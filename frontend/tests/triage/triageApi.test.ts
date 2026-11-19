@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   finalizeSolicitation,
   getSolicitation,
-  getSolicitationSession,
+  openSolicitationSession,
   listSolicitations,
   sendSolicitationMessage,
 } from '../../src/features/triage/triageApi'
@@ -87,12 +87,12 @@ describe('triage API', () => {
     fetchMock.mockResolvedValueOnce(Response.json(detail))
 
     await expect(
-      getSolicitationSession(solicitation.id, signal),
+      openSolicitationSession(solicitation.id, signal),
     ).resolves.toEqual(detail)
 
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      `${baseUrl}/solicitations/solicitation%2Fa/session`,
-      expect.objectContaining({ signal }),
+      `${baseUrl}/solicitations/solicitation%2Fa/open`,
+      expect.objectContaining({ method: 'POST', signal }),
     )
     expect(authorization()).toBe('Bearer test-token')
   })
@@ -138,7 +138,7 @@ describe('triage API', () => {
     { operation: 'read', request: () => getSolicitation(solicitation.id) },
     {
       operation: 'open session',
-      request: () => getSolicitationSession(solicitation.id),
+      request: () => openSolicitationSession(solicitation.id),
     },
     {
       operation: 'send',

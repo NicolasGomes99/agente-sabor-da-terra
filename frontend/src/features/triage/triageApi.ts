@@ -23,13 +23,13 @@ export function getSolicitation(
   )
 }
 
-export function getSolicitationSession(
+export function openSolicitationSession(
   solicitationId: string,
   signal?: AbortSignal,
 ): Promise<SolicitationSession> {
   return apiRequest<SolicitationSession>(
-    `/solicitations/${encodeURIComponent(solicitationId)}/session`,
-    { signal },
+    `/solicitations/${encodeURIComponent(solicitationId)}/open`,
+    { method: 'POST', signal },
   )
 }
 

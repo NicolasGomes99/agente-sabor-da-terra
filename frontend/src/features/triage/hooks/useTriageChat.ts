@@ -4,7 +4,7 @@ import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
 import {
   finalizeSolicitation,
-  getSolicitationSession,
+  openSolicitationSession,
   sendSolicitationMessage,
 } from '../triageApi'
 import type { SolicitationSession } from '../types'
@@ -47,7 +47,7 @@ export function useTriageChat(solicitationId: string | undefined) {
 
       setDetail({ status: 'loading' })
       try {
-        const session = await getSolicitationSession(
+        const session = await openSolicitationSession(
           solicitationId,
           controller.signal,
         )

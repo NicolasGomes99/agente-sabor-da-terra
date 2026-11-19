@@ -13,7 +13,7 @@ import {
 import { listDocuments } from '../../src/features/documents/documentsApi'
 import { getProducer, listProducers, listProducts } from '../../src/features/registry/registryApi'
 import {
-  getSolicitationSession,
+  openSolicitationSession,
   listSolicitations,
 } from '../../src/features/triage/triageApi'
 import { ApiError } from '../../src/lib/api-client'
@@ -37,7 +37,7 @@ vi.mock('../../src/features/chat/chatApi', () => ({
 }))
 vi.mock('../../src/features/triage/triageApi', () => ({
   finalizeSolicitation: vi.fn(),
-  getSolicitationSession: vi.fn(),
+  openSolicitationSession: vi.fn(),
   listSolicitations: vi.fn(),
   sendSolicitationMessage: vi.fn(),
 }))
@@ -46,7 +46,7 @@ const chatRead = vi.mocked(getChatSession)
 const chatCreate = vi.mocked(createChatSession)
 const chatSend = vi.mocked(sendChatMessage)
 const triageList = vi.mocked(listSolicitations)
-const triageRead = vi.mocked(getSolicitationSession)
+const triageRead = vi.mocked(openSolicitationSession)
 const session = { id: 'session-a', title: 'Conversa A', created_at: '2026-11-17T12:00:00Z' }
 
 function renderRoutes(initialEntry: string) {

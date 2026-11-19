@@ -6,7 +6,7 @@ import { AuthProvider } from '../../src/features/auth/AuthContext'
 import { TriageChatPage } from '../../src/features/triage/pages/TriageChatPage'
 import {
   finalizeSolicitation,
-  getSolicitationSession,
+  openSolicitationSession,
   sendSolicitationMessage,
 } from '../../src/features/triage/triageApi'
 import type { SolicitationSession } from '../../src/features/triage/types'
@@ -15,11 +15,11 @@ import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
 vi.mock('../../src/features/triage/triageApi', () => ({
   finalizeSolicitation: vi.fn(),
-  getSolicitationSession: vi.fn(),
+  openSolicitationSession: vi.fn(),
   sendSolicitationMessage: vi.fn(),
 }))
 
-const read = vi.mocked(getSolicitationSession)
+const read = vi.mocked(openSolicitationSession)
 const send = vi.mocked(sendSolicitationMessage)
 const finalize = vi.mocked(finalizeSolicitation)
 const timestamp = '2026-10-30T16:00:00Z'
