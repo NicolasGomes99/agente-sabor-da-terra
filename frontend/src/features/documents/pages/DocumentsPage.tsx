@@ -166,15 +166,24 @@ export function DocumentsPage() {
       setSelectedDocument((current) => current?.id === id ? null : current)
     } catch (error) {
       if (lifetime.signal.aborted) return
-      const status = error instanceof ApiError ? error.status : undefined
+      const apiError = error instanceof ApiError ? error : null
+      const status = apiError?.status
+      const detail = apiError?.details
       if (status === 401) {
         logout()
       } else {
         setDeleteError({
           id,
-          message: status === 404
-            ? 'O documento não está mais disponível no servidor.'
-            : 'Não foi possível confirmar a exclusão do documento.',
+          message: status === 409
+            ? typeof detail === 'object'
+              && detail !== null
+              && 'detail' in detail
+              && typeof detail.detail === 'string'
+              ? detail.detail
+              : 'O documento está citado em uma conversa e não pode ser excluído.'
+            : status === 404
+              ? 'O documento não está mais disponível no servidor.'
+              : 'Não foi possível confirmar a exclusão do documento.',
         })
       }
     } finally {
