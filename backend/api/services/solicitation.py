@@ -1,6 +1,6 @@
 from uuid import UUID, uuid4
 
-from ..formatters.triage import (
+from ..helpers.triage import (
     build_triage_session_title,
     format_triage_analysis,
 )

@@ -66,8 +66,8 @@ async def get_solicitation(
     return SolicitationOut.model_validate(solicitation)
 
 
-@router.get(
-    "/{solicitation_id}/session",
+@router.post(
+    "/{solicitation_id}/open",
     response_model=SolicitationSessionOut,
 )
 async def open_solicitation_session(

@@ -14,6 +14,8 @@ from alembic import command
 
 SOLICITATION_REVISION = "0007_create_solicitations"
 PARENT_REVISION = "0005_chat_message_role_enum"
+MAIN_REVISION = "0007_chunk_csv_record"
+MERGE_REVISION = "0008_merge_triage_main"
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -287,6 +289,7 @@ def test_solicitation_migration_upgrade_downgrade_upgrade(
     )
     assert revision is not None
     assert revision.down_revision == PARENT_REVISION
+    assert ScriptDirectory.from_config(config).get_heads() == [MERGE_REVISION]
 
     with PostgresContainer(
         image="postgres:16-alpine",
@@ -364,4 +367,81 @@ def test_solicitation_migration_upgrade_downgrade_upgrade(
         assert current == SOLICITATION_REVISION
         assert tables == baseline_tables | {"solicitations"}
         asyncio.run(_check_schema(url))
-        asyncio.run(_insert_triage_session(url))
+        existing_triage_session_id = asyncio.run(_insert_triage_session(url))
+
+        command.upgrade(config, "head")
+        tables, current = asyncio.run(_snapshot(url))
+        assert current == MERGE_REVISION
+        assert {"citations", "document_chunks", "solicitations"} <= tables
+        assert asyncio.run(
+            _count(
+                url,
+                "SELECT count(*) FROM chat_sessions WHERE id = :session_id",
+                {"session_id": private_session_id},
+            )
+        ) == 1
+        assert asyncio.run(
+            _count(
+                url,
+                "SELECT count(*) FROM chat_sessions WHERE id = :session_id",
+                {"session_id": existing_triage_session_id},
+            )
+        ) == 1
+
+
+def test_full_migration_history_upgrades_from_zero_and_existing_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+    with PostgresContainer(
+        image="postgres:16-alpine",
+        username="test",
+        password="test",
+        dbname="test_full_migration_history",
+    ) as container:
+        url = container.get_connection_url(driver="asyncpg")
+        monkeypatch.setenv("DATABASE_URL", url)
+
+        command.upgrade(config, "head")
+        tables, current = asyncio.run(_snapshot(url))
+        assert current == MERGE_REVISION
+        assert {
+            "users",
+            "chat_sessions",
+            "chat_messages",
+            "documents",
+            "document_chunks",
+            "citations",
+            "solicitations",
+        } <= tables
+        asyncio.run(_check_schema(url))
+
+        command.downgrade(config, "base")
+        command.upgrade(config, MAIN_REVISION)
+        tables, current = asyncio.run(_snapshot(url))
+        assert current == MAIN_REVISION
+        assert "solicitations" not in tables
+        user_id, private_session_id = asyncio.run(_seed_private_session(url))
+        command.upgrade(config, "head")
+
+        tables, current = asyncio.run(_snapshot(url))
+        assert current == MERGE_REVISION
+        assert "solicitations" in tables
+        asyncio.run(_check_schema(url))
+        assert asyncio.run(
+            _count(
+                url,
+                "SELECT count(*) FROM chat_sessions WHERE id = :session_id",
+                {"session_id": private_session_id},
+            )
+        ) == 1
+
+        assert asyncio.run(
+            _count(
+                url,
+                "SELECT count(*) FROM chat_sessions WHERE user_id = :user_id",
+                {"user_id": user_id},
+            )
+        ) == 1

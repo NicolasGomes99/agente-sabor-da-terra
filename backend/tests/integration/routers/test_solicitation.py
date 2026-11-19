@@ -67,6 +67,8 @@ def solicitation_payload(
     received_at: str = "2026-10-30",
     request_type: str = "pedido",
     delivery_start: str | None = None,
+    response_deadline: str | None = None,
+    document_availability_start: str | None = None,
     summary: str | None = None,
     urgency_reason: str = "A classificar.",
     pending_items: list[dict[str, Any]] | None = None,
@@ -74,6 +76,12 @@ def solicitation_payload(
     extracted_data: dict[str, Any] = {}
     if delivery_start is not None:
         extracted_data["delivery_date_start"] = delivery_start
+    if response_deadline is not None:
+        extracted_data["response_deadline"] = response_deadline
+    if document_availability_start is not None:
+        extracted_data["document_availability_date_start"] = (
+            document_availability_start
+        )
 
     return {
         "input": {
@@ -120,7 +128,7 @@ async def test_create_solicitation_persists_triage_session_history(
     payload = solicitation_payload(
         "PED-2026-015",
         request_type="oferta",
-        delivery_start="2026-10-31",
+        response_deadline="2026-10-31",
         summary=(
             "Retorno solicitado até 31/10/2026, dia seguinte ao recebimento."
         ),
@@ -132,6 +140,7 @@ async def test_create_solicitation_persists_triage_session_history(
             }
         ],
     )
+    assert "delivery_date_start" not in payload["analysis"]["extracted_data"]
     payload["id"] = str(solicitation_id)
 
     response = await client.post(
@@ -167,6 +176,8 @@ async def test_create_solicitation_persists_triage_session_history(
     assert messages[0][1] == payload["input"]["message_text"]
     analysis_message = messages[1][1]
     assert "31/10/2026" in analysis_message
+    assert "Ação: Responder" in analysis_message
+    assert "Ação: Entregar" not in analysis_message
     assert "dia seguinte" in analysis_message.lower()
     assert "Pendências:" in analysis_message
     assert "Qual canal usar para responder?" in analysis_message
@@ -196,7 +207,7 @@ async def test_ped_2026_015_preserves_deadline_and_reason_after_reopen(
         headers,
         "PED-2026-015",
         request_type="oferta",
-        delivery_start="2026-10-31",
+        response_deadline="2026-10-31",
         summary=(
             "Retorno solicitado até 31/10/2026, dia seguinte ao recebimento."
         ),
@@ -212,25 +223,33 @@ async def test_ped_2026_015_preserves_deadline_and_reason_after_reopen(
         ],
     )
 
-    first_open = await client.get(
-        f"/solicitations/{created['id']}/session",
+    first_open = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=headers,
     )
     assert first_open.status_code == 200
+    assert first_open.json()["urgency"] == "urgente"
     first_messages = first_open.json()["messages"]
     analysis_content = first_messages[1]["content"]
     assert "31/10/2026" in analysis_content
+    assert "Ação: Responder" in analysis_content
+    assert "Ação: Entregar" not in analysis_content
+    assert "Data de recebimento considerada: 30/10/2026" in analysis_content
     assert "dia seguinte ao recebimento" in analysis_content
     assert "Responder por telefone?" in analysis_content
 
-    reopened = await client.get(
-        f"/solicitations/{created['id']}/session",
+    reopened = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=headers,
     )
     assert reopened.status_code == 200
     assert reopened.json()["status"] == "em_analise"
+    assert reopened.json()["urgency"] == "urgente"
     assert reopened.json()["summary"] == created["summary"]
     assert reopened.json()["messages"] == first_messages
+    assert "Ação: Responder\nPrazo: 31/10/2026" in (
+        reopened.json()["messages"][1]["content"]
+    )
 
     detail = await client.get(
         f"/solicitations/{created['id']}",
@@ -242,6 +261,36 @@ async def test_ped_2026_015_preserves_deadline_and_reason_after_reopen(
 
 
 @pytest.mark.asyncio
+async def test_ped_2026_014_formats_document_availability_deadline(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    headers = await create_user_headers(db_session)
+    created = await create_solicitation(
+        client,
+        headers,
+        "PED-2026-014",
+        request_type="comunicado",
+        document_availability_start="2026-11-11",
+        summary=(
+            "Disponibilizar documentos no primeiro dia da inspeção, 11/11/2026."
+        ),
+    )
+
+    opened = await client.post(
+        f"/solicitations/{created['id']}/open",
+        headers=headers,
+    )
+
+    assert opened.status_code == 200
+    assert opened.json()["urgency"] == "normal"
+    analysis_content = opened.json()["messages"][1]["content"]
+    assert "Ação: Disponibilizar documentos" in analysis_content
+    assert "Prazo: 11/11/2026" in analysis_content
+    assert "Ação: Entregar" not in analysis_content
+
+
+@pytest.mark.asyncio
 async def test_open_session_transitions_to_review_and_shares_clarifications(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -250,8 +299,8 @@ async def test_open_session_transitions_to_review_and_shares_clarifications(
     reviewer_b = await create_user_headers(db_session)
     created = await create_solicitation(client, reviewer_a, "PED-2026-016")
 
-    first_open = await client.get(
-        f"/solicitations/{created['id']}/session",
+    first_open = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=reviewer_a,
     )
     assert first_open.status_code == 200
@@ -266,8 +315,14 @@ async def test_open_session_transitions_to_review_and_shares_clarifications(
     analysis_content = first_body["messages"][1]["content"]
     assert "Pendências:" in analysis_content
 
-    second_open = await client.get(
+    old_get = await client.get(
         f"/solicitations/{created['id']}/session",
+        headers=reviewer_b,
+    )
+    assert old_get.status_code == 404
+
+    second_open = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=reviewer_b,
     )
     assert second_open.status_code == 200
@@ -282,8 +337,8 @@ async def test_open_session_transitions_to_review_and_shares_clarifications(
     assert clarification.status_code == 201
     assert clarification.json()["role"] == "user"
 
-    shared = await client.get(
-        f"/solicitations/{created['id']}/session",
+    shared = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=reviewer_b,
     )
     assert shared.status_code == 200
@@ -335,8 +390,8 @@ async def test_queue_keeps_received_status_until_first_open(
     second_list = await client.get("/solicitations", headers=headers)
     assert all(item["status"] == "recebida" for item in second_list.json())
 
-    opened = await client.get(
-        f"/solicitations/{normal['id']}/session",
+    opened = await client.post(
+        f"/solicitations/{normal['id']}/open",
         headers=headers,
     )
     assert opened.status_code == 200
@@ -371,8 +426,8 @@ async def test_finalize_without_service_and_reject_new_messages(
     assert finalized_again.status_code == 200
     assert finalized_again.json()["status"] == "finalizada"
 
-    read_only = await client.get(
-        f"/solicitations/{created['id']}/session",
+    read_only = await client.post(
+        f"/solicitations/{created['id']}/open",
         headers=reviewer_b,
     )
     assert read_only.status_code == 200
@@ -445,8 +500,8 @@ async def test_solicitation_requests_without_valid_jwt_are_rejected(
     no_token_get = await client.get("/solicitations")
     no_token_create = await client.post("/solicitations", json=payload)
     no_token_detail = await client.get(f"/solicitations/{missing_id}")
-    no_token_session = await client.get(
-        f"/solicitations/{missing_id}/session"
+    no_token_session = await client.post(
+        f"/solicitations/{missing_id}/open"
     )
     no_token_message = await client.post(
         f"/solicitations/{missing_id}/messages",
