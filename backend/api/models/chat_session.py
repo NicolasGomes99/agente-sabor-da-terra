@@ -15,10 +15,10 @@ class ChatSession(Base):
         Uuid, primary_key=True, default=uuid4
     )
 
-    user_id: Mapped[UUID] = mapped_column(
+    user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         index=True,
-        nullable=False,
+        nullable=True,
     )
 
     title: Mapped[str] = mapped_column(

@@ -1,4 +1,3 @@
-
 from threading import Lock
 from typing import Annotated
 
@@ -20,6 +19,7 @@ from .repositories.document import DocumentRepository
 from .repositories.order import OrderRepository
 from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
+from .repositories.solicitation import SolicitationRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
@@ -27,6 +27,7 @@ from .services.document import DocumentService
 from .services.order import OrderService
 from .services.producer import ProducerService
 from .services.product import ProductService
+from .services.solicitation import SolicitationService
 from .services.user import UserService
 from .storage.base import DocumentStorage
 from .storage.gcs import GCSDocumentStorage
@@ -39,9 +40,11 @@ _gcs_client: Client | None = None
 
 def _get_gcs_client() -> Client:
     global _gcs_client
+
     with _gcs_client_lock:
         if _gcs_client is None:
             _gcs_client = Client()
+
         return _gcs_client
 
 
@@ -94,7 +97,7 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
     session_maker = database.get_session_maker()
-    
+
     try:
         async with session_maker() as session:
             user = await _build_auth_service(session).get_current_user(token)
@@ -114,6 +117,7 @@ async def get_current_user(
 
     return user
 
+
 def get_order_service(
     session: Annotated[
         AsyncSession,
@@ -124,4 +128,10 @@ def get_order_service(
         repository=OrderRepository(session),
         product_repository=ProductRepository(session),
     )
+
+
+def get_solicitation_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> SolicitationService:
+    return SolicitationService(SolicitationRepository(session))
 

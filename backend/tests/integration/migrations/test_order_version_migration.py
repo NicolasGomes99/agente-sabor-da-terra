@@ -53,7 +53,15 @@ def test_order_version_migration_preserves_orders_and_items(monkeypatch: pytest.
     config = Config(str(BACKEND_DIR / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [VERSION_REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert VERSION_REVISION in {
+        revision.revision
+        for revision in script.walk_revisions(
+            base="base",
+            head=heads[0],
+    )
+}
     parent = script.get_revision(VERSION_REVISION).down_revision
     assert isinstance(parent, str)
     with PostgresContainer(

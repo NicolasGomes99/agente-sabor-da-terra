@@ -1,5 +1,5 @@
 
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type KeyboardEvent } from 'react'
 
 interface ChatInputProps {
   onSend: (content: string) => Promise<void>
@@ -27,6 +27,14 @@ export function ChatInput({
     }
   }
 
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+
+    event.preventDefault()
+    if (!content.trim() || disabled) return
+    event.currentTarget.form?.requestSubmit()
+  }
+
   return (
     <form className="chat-input-area" onSubmit={handleSubmit}>
       <label className="sr-only" htmlFor="chat-message">
@@ -40,6 +48,7 @@ export function ChatInput({
         placeholder="Digite sua mensagem..."
         value={content}
         onChange={(event) => setContent(event.target.value)}
+        onKeyDown={handleKeyDown}
         disabled={disabled}
       />
 

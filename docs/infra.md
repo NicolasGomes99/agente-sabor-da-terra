@@ -1,6 +1,6 @@
 # Infraestrutura
 
-A infraestrutura do core sera toda costruida no Google Cloud, para o SPA sera utilizado o Firebase Hosting para publicar. Um serviço Cloud Run vai executar a API do FastAPI, o orquestrador e os agentes de triagem e consulta. Com os 60 a 100 pedidos por dia previstos no cenário, um serviço simplifica a publicação. A fila do Cloud Tasks limita a carga das triagens para que o mesmo serviço possa atender ao chat.
+A aplicação usa o Google Cloud. O Firebase Hosting publica a interface React. Um serviço do Cloud Run executa a API FastAPI, o orquestrador e os agentes de triagem e consulta. O Cloud SQL persiste as mensagens recebidas, e o Cloud Tasks limita a carga das triagens para que o mesmo serviço possa atender ao chat.
 
 Os recursos regionais da demonstração ficarão em Iowa (`us-central1`). A região tem tarifas de Tier 1 no Cloud Run e dá acesso à franquia do Cloud Storage. O Cloud Run, o Cloud SQL e o bucket ficarão na mesma região para evitar transferências entre regiões. [Preços do Cloud Run](https://cloud.google.com/run/pricing) · [Franquia do Cloud Storage](https://cloud.google.com/storage/pricing#cloud-storage-always-free-usage-limits)
 
@@ -10,7 +10,9 @@ Os recursos regionais da demonstração ficarão em Iowa (`us-central1`). A regi
 
 #### Google Cloud Run
 
-O Cloud Run hospeda a API FastAPI e os agentes no mesmo serviço com a URL HTTPS atende ao frontend, recebe os eventos dos canais integrados e recebe as chamadas do Cloud Tasks e do Cloud Scheduler.
+O Cloud Run hospeda a API FastAPI e os agentes no mesmo serviço. A API atende ao frontend, recebe as mensagens dos canais integrados e do script Facepe e atende às chamadas autenticadas do Cloud Tasks e do Cloud Scheduler.
+
+A API persiste a entrada no Cloud SQL antes de confirmar o recebimento ao canal e solicita o enfileiramento no Cloud Tasks. Quando a tarefa é disparada, a API recupera o texto e a data de recebimento originais, chama o agente e grava o resultado da triagem.
 
 Escolhemos o Cloud Run porque a carga é pequena e varia ao longo do dia. O serviço ajusta o número de instâncias automaticamente e pode reduzir a zero em períodos sem tráfego. Isso evita manter um servidor ativo só para aguardar mensagens. [Escalonamento do Cloud Run](https://docs.cloud.google.com/run/docs/about-instance-autoscaling)
 
@@ -20,7 +22,7 @@ O Firebase Hosting publica os arquivos gerados pelo build do React. Escolhemos o
 
 #### Cloud SQL
 
-O Cloud SQL hospeda o PostgreSQL com os usuários, as conversas, os pedidos e os dados usados na consulta documental. Escolhemos o PostgreSQL gerenciado porque ele reúne os dados relacionais e a busca vetorial no mesmo banco. O agente de consulta usa a extensão `pgvector` para buscar os trechos que ajudam a responder às perguntas. [Modelo do banco](banco-de-dados.md) · [Busca vetorial no Cloud SQL](https://docs.cloud.google.com/sql/docs/postgres/ai-overview)
+O Cloud SQL hospeda o PostgreSQL com os usuários, as conversas, os pedidos, as entradas de mensagens e os dados usados na consulta documental. Cada `EntradaRecebida` guarda o UUID, o texto original, o remetente, o canal de origem, a data de recebimento e o estado da triagem. O UUID identifica reentregas. O agente de consulta usa a extensão `pgvector` para buscar trechos que ajudam a responder às perguntas. [Modelo do banco](schemas-db.md) · [Busca vetorial no Cloud SQL](https://docs.cloud.google.com/sql/docs/postgres/ai-overview)
 
 #### Cloud Storage
 
@@ -32,15 +34,17 @@ Se o log indicar um commit incerto ou uma falha na limpeza, procure a `storage_k
 
 #### Pub/Sub
 
-O Gmail publica notificações de alterações na caixa de entrada em um tópico do Pub/Sub. Uma assinatura push entrega essas notificações à API no Cloud Run, que consulta a API do Gmail para buscar as novas mensagens. Escolhemos o Pub/Sub para receber os eventos conforme chegam e evitar consultas periódicas à caixa de entrada. [Notificações push do Gmail](https://developers.google.com/workspace/gmail/api/guides/push)
+Na integração do Gmail, o Pub/Sub entrega à API no Cloud Run os avisos de alteração da caixa de entrada. Ao receber um aviso, a API consulta o Gmail para obter as mensagens e registra cada uma pela entrada comum. A caixa integrada e o ID da mensagem no Gmail são usados para definir o UUID da entrada. A entrega do canal define o recorte da consulta à caixa. [Avisos do Gmail](https://developers.google.com/workspace/gmail/api/guides/push) · [Listagem de mensagens](https://developers.google.com/workspace/gmail/api/guides/list-messages)
 
 #### Cloud Tasks
 
-A API registra a mensagem recebida e envia seu identificador para a fila do Cloud Tasks. A fila chama a rota de triagem com uma execução por vez. Escolhemos o serviço para que o canal de origem receba a confirmação de recebimento logo após o enfileiramento e para que as triagens avancem à medida que a execução anterior termina. A fila também pode repetir chamadas que falharem. [Cloud Tasks com Cloud Run](https://docs.cloud.google.com/run/docs/triggering/using-tasks) · [Limites de execução da fila](https://docs.cloud.google.com/tasks/docs/configuring-queues)
+Cada tarefa leva o UUID de uma entrada persistida e chama a rota de processamento no Cloud Run. Configure a fila da demonstração para disparar uma triagem por vez. Como a mesma tarefa pode ser entregue novamente, a API usa o estado da entrada no PostgreSQL para evitar duplicação de resultados. Quando a aplicação registra uma falha de análise antes de criar a solicitação, o funcionário pode pedir outra tentativa pela tela de Triagem, conforme o RF47. [Cloud Tasks com Cloud Run](https://docs.cloud.google.com/run/docs/triggering/using-tasks) · [Limites de execução da fila](https://docs.cloud.google.com/tasks/docs/configuring-queues) · [Requisitos](requisitos.md)
 
 #### Cloud Scheduler
 
-O Cloud Scheduler chama a API para verificar quais ocorrências de agendamentos semanais devem entrar na fila de triagem. Uma segunda rotina renova diariamente o registro de notificações do Gmail. Escolhemos o serviço para executar essas rotinas nos horários previstos, mesmo com o Cloud Run em zero instâncias. [Cloud Scheduler com Cloud Run](https://docs.cloud.google.com/run/docs/triggering/using-scheduler) · [Renovação das notificações do Gmail](https://developers.google.com/workspace/gmail/api/guides/push#renew_mailbox_watch)
+O Cloud Scheduler chama periodicamente a API para recuperar entradas que foram persistidas e ficaram sem enfileiramento. A API no Cloud Run consulta o banco e solicita o enfileiramento dessas entradas no Cloud Tasks.
+
+Quando o Gmail estiver integrado por Pub/Sub, uma chamada diária do Scheduler aciona a renovação da inscrição de avisos da caixa (`watch`). Essas chamadas chegam ao Cloud Run mesmo quando o serviço está com zero instâncias. [Cloud Scheduler com Cloud Run](https://docs.cloud.google.com/run/docs/triggering/using-scheduler) · [Renovação do watch do Gmail](https://developers.google.com/workspace/gmail/api/guides/push#renew_mailbox_watch)
 
 #### Secret Manager
 
@@ -82,7 +86,7 @@ A franquia mensal cobre 1 milhão de operações por conta de faturamento e o ex
 
 #### Cloud Scheduler
 
-A franquia cobre três jobs por conta de faturamento e cada job adicional custa US$ 0,10 por 31 dias. A cobrança é por job cadastrado, independentemente do número de execuções. Com um job para os agendamentos e outro para renovar as notificações do Gmail, o custo previsto é **US$ 0** com a franquia disponível. [Preços do Cloud Scheduler](https://cloud.google.com/scheduler/pricing)
+A franquia cobre três jobs por conta de faturamento e cada job adicional custa US$ 0,10 por 31 dias. A cobrança é por job cadastrado, independentemente do número de execuções. Com um job para recuperar entradas sem enfileiramento e outro para renovar a inscrição do Gmail quando o canal estiver integrado por Pub/Sub, o custo previsto é **US$ 0** com a franquia disponível. [Preços do Cloud Scheduler](https://cloud.google.com/scheduler/pricing)
 
 #### Secret Manager
 
@@ -90,10 +94,10 @@ Com até seis versões ativas de segredos e 10.000 acessos no mês, o custo prev
 
 ## Verificação da demonstração
 
-- Envie uma nova demanda pelo Gmail e outra pelo WhatsApp com o funcionário desconectado. Confira se a fila executa uma triagem por vez e se cada nova demanda gera uma solicitação. Envie uma resposta que dê continuidade a uma solicitação aberta e confira se ela entra na conversa existente. Reenvie o mesmo evento e confira se o sistema reaproveita o registro.
-- Execute o script das 15 mensagens de `pedidos.json` e confira os cartões de triagem. Para essas mensagens de teste, o funcionário pode revisar e copiar o rascunho. Teste o envio real com os contatos de teste autorizados pela equipe.
+- Envie uma mensagem pelo Gmail e outra pelo WhatsApp com o funcionário desconectado. Confira se cada mensagem gera um cartão e se a fila executa uma triagem por vez. Em cada canal, envie uma resposta nova a uma mensagem anterior e confira que ela gera outro cartão. Repita a entrega do evento da resposta e verifique que o UUID da entrada e os dois cartões daquela conversa são preservados.
+- Execute duas vezes o script das 15 mensagens de `pedidos.json`. Confira que cada entrada mantém o UUID e a data original e que a reentrega não gera cartões duplicados.
+- Simule uma falha de enfileiramento depois de persistir uma entrada. Confira que a chamada periódica do Scheduler permite à API reenfileirar a entrada e gerar o cartão. Em outro teste, simule falha na análise e valide **Tentar triagem novamente** na tela, conforme o RF47.
 - Valide a API de documentos com um bucket privado. Com um JWT válido, envie dois arquivos com o mesmo nome e conteúdos diferentes. Confira os dois registros na lista e compare os bytes de cada download com os originais. Exclua um dos registros e confira se apenas o objeto correspondente foi removido do bucket e se o outro continua disponível.
 - Quando a consulta documental e as citações estiverem disponíveis, adicione um documento, consulte seu conteúdo pelo chat e abra o original pela citação.
-- Verifique se uma ocorrência agendada entra na fila na data prevista.
 
 O método de publicação e a escolha do framework e do modelo dos agentes ainda serão definidos.

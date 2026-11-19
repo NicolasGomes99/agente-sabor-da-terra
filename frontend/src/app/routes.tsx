@@ -10,6 +10,8 @@ import { OrdersPage } from '../features/orders/pages/OrdersPage'
 import { ProducerDetailPage } from '../features/registry/pages/ProducerDetailPage'
 import { ProducersPage } from '../features/registry/pages/ProducersPage'
 import { ProductsPage } from '../features/registry/pages/ProductsPage'
+import { TriageChatPage } from '../features/triage/pages/TriageChatPage'
+import { TriageQueuePage } from '../features/triage/pages/TriageQueuePage'
 
 function PublicRoute() {
   const { isAuthenticated } = useAuth()
@@ -37,6 +39,8 @@ export function AppRoutes() {
       </Route>
       <Route element={<ProtectedRoute />}>
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/triagem" element={<TriageQueuePage />} />
+        <Route path="/triagem/:solicitationId" element={<TriageChatPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/orders/new" element={<OrderFormPage />} />

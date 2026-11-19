@@ -1,45 +1,59 @@
 # Integrações de mensagens
 
-O e-mail é o canal fixo. Para a demonstração, valide primeiro o WhatsApp com o número de teste da Meta. Use o Telegram como alternativa se a equipe não conseguir validar o fluxo do WhatsApp antes da apresentação.
+O e-mail é o canal fixo. Para a demonstração, valide primeiro o recebimento pelo WhatsApp com o número de teste da Meta. Use o Telegram como alternativa se a equipe não conseguir validar o recebimento pelo WhatsApp antes da apresentação. Os funcionários escrevem e enviam respostas e notificações pelos canais externos à aplicação.
 
 ## Fluxo comum
 
-1. Os adaptadores do Gmail e do WhatsApp convertem as mensagens para a interface comum de entrada. O formulário web envia diretamente nesse formato. A entrada recebe o canal, o identificador de origem, o remetente, o texto original e a data de recebimento. Preserve essa data nas reentregas e mantenha as referências de conversa e de resposta fornecidas pelo canal.
-2. Registre a mensagem com uma chave única por canal e identificador de origem. Responda ao webhook depois de persistir o evento. Ao processar a triagem, a aplicação usa o registro para acionar o assistente. Reentregas ou consultas repetidas reaproveitam o registro existente. Se o script de apresentação rodar junto aos canais reais, identifique internamente as mensagens de teste. Para as respostas a essas mensagens, ofereça apenas revisão e cópia do rascunho, conforme o RF34.
-3. Vincule a mensagem a uma solicitação aberta quando houver uma referência confiável no histórico, o contato corresponder ao vínculo e a mensagem der continuidade à mesma demanda. Abra nova triagem para um pedido independente, mesmo que chegue como resposta direta na conversa anterior. Abra nova triagem também quando o vínculo estiver ausente, for ambíguo ou apontar para uma solicitação encerrada.
-4. A pedido do funcionário, o assistente prepara o rascunho da resposta ou da notificação. O funcionário pode editar o texto e confere o destinatário e o canal antes de autorizar o envio. As respostas ao remetente seguem pelo canal de origem.
-5. Antes do envio, registre o texto autorizado, o destino, o canal e quem confirmou. Quando o texto confirmar fornecimento, valide o compromisso conforme o RF44 na confirmação do funcionário e imediatamente antes de cada tentativa de envio. Use o RNF03 e o RNF08 para tratar confirmações repetidas ou simultâneas. Registre o retorno do provedor e atualize o histórico se o canal informar um resultado posterior. Registre a aceitação pelo canal e a confirmação de entrega como informações distintas, quando disponíveis. As novas tentativas devem seguir as condições do RF45.
+1. Os adaptadores dos canais, o formulário web e o script de apresentação usam o formato comum de entrada. A entrada guarda o UUID, o texto original, o remetente, o canal de origem, a data de recebimento e o estado da triagem.
+2. Persista a entrada antes de iniciar a triagem e antes de confirmar o recebimento ao webhook. Reentregas com o mesmo UUID reaproveitam o registro e preservam a data original. A aplicação usa essa data para acionar o assistente, inclusive em novas tentativas. Se a triagem falhar antes de criar a solicitação, o funcionário pode tentar novamente a partir da entrada registrada.
+3. Cada mensagem nova, inclusive uma resposta, passa por triagem própria e gera uma solicitação quando a análise conclui. Reentregas de uma entrada concluída mantêm o cartão já criado.
 
-O RF11 trata do vínculo das mensagens e os RF34 a RF36 tratam da revisão e do histórico. O RF40 define o envio autorizado, o RF44 define a validação dos compromissos de fornecimento e o RF45 define as condições para novas tentativas. [Requisitos](requisitos.md).
+O RF11 define o recebimento e a criação de uma solicitação por mensagem nova. O RF47 descreve como o funcionário tenta novamente pela tela de Triagem. O RNF03 trata da deduplicação, o RNF05 exige a validação de autenticidade dos webhooks, o RNF07 define a entrada comum e o RNF11 trata da recuperação de falhas. [Requisitos](requisitos.md)
+
+## Identidade da mensagem recebida
+
+O UUID é a chave primária da entrada. Quando a origem fornece um identificador estável, a aplicação usa a origem, seu contexto e esse identificador para obter o mesmo UUID em reentregas. Mensagens com identificadores diferentes geram entradas distintas, mesmo quando o texto coincide. Uma mensagem sem identificador estável recebe um UUID novo.
+
+| Origem | Contexto | Identificador usado para definir o UUID |
+| --- | --- | --- |
+| Gmail | Caixa de e-mail integrada | ID da mensagem no Gmail |
+| WhatsApp | Número integrado que recebeu a mensagem | ID da mensagem no WhatsApp |
+| Formulário web | Formulário da aplicação | UUID criado antes do primeiro envio e reutilizado em novas tentativas |
+| Script Facepe | Base Facepe | ID do registro em `pedidos.json` |
+| Telegram, se integrado | Bot e chat de origem | `message_id` |
+
+Para mensagens dos canais integrados, preserve a data de recebimento fornecida pelo canal quando disponível. Caso contrário, registre o momento em que a aplicação recebeu a mensagem pela primeira vez. O script Facepe usa o campo `data_recebimento` do registro e mantém o canal original para exibição.
 
 ## E-mail
 
-Use uma caixa dedicada para receber solicitações e enviar respostas. Com Gmail, autorize a conta por OAuth 2.0 e use `gmail.readonly` para consultar mensagens e `gmail.send` para enviar o texto aprovado. Uma tarefa agendada pode buscar mensagens novas e registrar o `id` de cada uma. Para responder na mesma conversa, use o `threadId`, os cabeçalhos `In-Reply-To` e `References` e o assunto da conversa. Em um aplicativo OAuth externo em modo de teste, o refresh token com escopos do Gmail expira em sete dias. [Autorização](https://developers.google.com/workspace/gmail/api/auth/web-server) · [Escopos](https://developers.google.com/workspace/gmail/api/auth/scopes) · [Consulta de mensagens](https://developers.google.com/workspace/gmail/api/guides/list-messages) · [Conversas](https://developers.google.com/workspace/gmail/api/guides/threads) · [Expiração do token](https://developers.google.com/identity/protocols/oauth2#expiration)
+Use uma caixa dedicada para receber solicitações. No Gmail, autorize a conta por OAuth 2.0 e use `gmail.readonly` para consultar as mensagens. Uma tarefa agendada pode buscar mensagens novas. Use o `id` da mensagem no Gmail e a caixa de origem para definir o UUID da entrada. Em um aplicativo OAuth externo em modo de teste, o refresh token com escopos do Gmail expira em sete dias. [Autorização](https://developers.google.com/workspace/gmail/api/auth/web-server) · [Escopos](https://developers.google.com/workspace/gmail/api/auth/scopes) · [Consulta de mensagens](https://developers.google.com/workspace/gmail/api/guides/list-messages) · [Expiração do token](https://developers.google.com/identity/protocols/oauth2#expiration)
 
-O Gmail também oferece notificações via Pub/Sub. Essa opção requer renovar `watch` e consultar o histórico da caixa para buscar as alterações. Quando o provedor oferecer IMAP e SMTP, o adaptador pode usar IMAP para leitura e SMTP para envio com a autenticação aceita pelo serviço. No Gmail, os dois protocolos aceitam OAuth 2.0. [Notificações do Gmail](https://developers.google.com/workspace/gmail/api/guides/push) · [IMAP e SMTP](https://developers.google.com/workspace/gmail/imap/imap-smtp) · [OAuth para IMAP e SMTP](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol)
+O Gmail também oferece avisos de alterações na caixa via Pub/Sub. Essa opção requer renovar `watch` e consultar as mensagens da caixa ao receber um aviso. Quando o provedor oferecer IMAP, o adaptador pode usá-lo para leitura com a autenticação aceita pelo serviço. O Gmail aceita OAuth 2.0 para IMAP. [Avisos de alterações do Gmail](https://developers.google.com/workspace/gmail/api/guides/push) · [OAuth para IMAP](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol)
 
 ## WhatsApp
 
 Configure o aplicativo na Meta, obtenha o token de acesso da Cloud API e cadastre os contatos da equipe para usar o número de teste fornecido pela Meta. Inscreva o aplicativo na conta do WhatsApp Business para receber eventos de `messages` em uma URL HTTPS pública. [Ambiente de teste da Meta](https://whatsappbusiness.com/developers/developer-hub/) · [Coleção oficial da Cloud API](https://www.postman.com/meta/whatsapp-business-platform/collection/wlk6lh4/whatsapp-cloud-api) · [Guia de webhook da Meta](https://whatsappbusiness.com/blog/how-to-use-webhooks-from-whatsapp-business-api/)
 
-No `GET` de verificação, confira `hub.verify_token` e devolva `hub.challenge` quando o token corresponder ao configurado. Em cada `POST`, valide `X-Hub-Signature-256` com o HMAC-SHA256 do corpo bruto calculado com o segredo do aplicativo. As mensagens de texto seguem para a triagem e os eventos de status atualizam o histórico de envios. [Exemplo de webhook da Meta](https://github.com/fbsamples/business-messaging-sample-tech-provider-app/blob/main/app/api/webhooks/route.ts) · [Eventos do WhatsApp](https://whatsappbusiness.com/blog/how-to-use-webhooks-from-whatsapp-business-api/)
-
-Teste com uma mensagem enviada pelo WhatsApp de um contato cadastrado. Confira se ela aparece na triagem e se o mesmo contato recebe a resposta após a confirmação do funcionário. Valide também o recebimento da notificação pelo contato que representa o produtor. Para testar a notificação em texto livre, o produtor de teste pode enviar uma mensagem ao número de teste e abrir a janela de atendimento antes do envio.
-
-Confirme o consentimento dos contatos para receber mensagens pelo WhatsApp. A janela de atendimento permite respostas em texto livre por 24 horas a partir da última mensagem de cada contato. Para iniciar uma conversa ou enviar fora da janela, use um modelo aprovado pela Meta. O funcionário revisa os valores dos campos do modelo antes de confirmar. [Política de Mensagens do WhatsApp Business](https://whatsappbusiness.com/pt-br/policy/)
+No `GET` de verificação, confira `hub.verify_token` e devolva `hub.challenge` quando o token corresponder ao configurado. Em cada `POST`, valide `X-Hub-Signature-256` com o HMAC-SHA256 do corpo bruto calculado com o segredo do aplicativo. Encaminhe as mensagens de texto recebidas para a triagem. [Exemplo de webhook da Meta](https://github.com/fbsamples/business-messaging-sample-tech-provider-app/blob/main/app/api/webhooks/route.ts) · [Eventos do WhatsApp](https://whatsappbusiness.com/blog/how-to-use-webhooks-from-whatsapp-business-api/)
 
 ## Telegram
 
 Crie o bot com `/newbot` no BotFather e guarde o token no backend. Em `setWebhook`, informe uma URL HTTPS e configure `secret_token`. Confira o segredo no cabeçalho `X-Telegram-Bot-Api-Secret-Token` a cada chamada. Quando houver um processo contínuo, o adaptador pode usar long polling com `getUpdates`. Use um modo de recebimento por bot. [BotFather](https://core.telegram.org/bots/features#creating-a-new-bot) · [Webhook](https://core.telegram.org/bots/api#setwebhook) · [Long polling](https://core.telegram.org/bots/api#getupdates)
 
-O adaptador do Telegram combina `message.chat.id` e `message.message_id` para formar o identificador externo da mensagem. O adaptador usa o mesmo escopo ao referenciar a mensagem respondida.
+O adaptador do Telegram usa o bot e `message.chat.id` como contexto e `message.message_id` como identificador da mensagem.
 
-Em chat privado, o primeiro contato parte do usuário. Na demonstração, o participante que representa o produtor abre o bot e toca em **Iniciar**. Associe o `chat_id` recebido ao cadastro desse produtor e use-o em `sendMessage` após a confirmação do funcionário. Para responder ao remetente de uma solicitação, use o `chat_id` da mensagem de origem. [Primeiro contato](https://core.telegram.org/bots#how-are-bots-different-from-users) · [Envio de mensagens](https://core.telegram.org/bots/api#sendmessage)
+Em chat privado, o primeiro contato parte do usuário. Na demonstração, o participante abre o bot, toca em **Iniciar** e escreve uma mensagem de teste para a triagem. [Primeiro contato](https://core.telegram.org/bots#how-are-bots-different-from-users)
+
+## Validação do recebimento
+
+- Em cada canal integrado, envie uma mensagem de teste à aplicação e confira o registro da entrada, a data de recebimento e a análise na triagem. Repita a entrega do mesmo evento e verifique que a aplicação mantém o mesmo UUID e um único cartão.
+- Execute o script Facepe duas vezes. Confira que cada registro mantém o mesmo UUID e preserva o `data_recebimento` de `pedidos.json`. Uma expressão como “amanhã” deve usar essa data mesmo se o script rodar em outro dia.
+- Nos canais com webhook, verifique que um evento que falha na validação de autenticidade é rejeitado antes de entrar na triagem.
 
 ## Execução em nuvem
 
 Se o backend rodar no Cloud Run, a URL HTTPS do serviço pode receber os webhooks. A rota de recebimento precisa aceitar chamadas externas e validar a credencial do provedor. As rotas internas exigem a autenticação dos funcionários. Webhooks e chamadas agendadas podem iniciar o serviço a partir de zero instâncias. Para manter polling contínuo em um serviço Cloud Run, configure pelo menos uma instância mínima e CPU disponível fora das requisições. Para consultar e-mail por agendamento, o Cloud Scheduler pode acionar um serviço privado via OIDC com uma conta autorizada a invocá-lo. [HTTPS](https://docs.cloud.google.com/run/docs/triggering/https-request) · [Escalonamento](https://docs.cloud.google.com/run/docs/about-instance-autoscaling) · [Alocação de CPU](https://docs.cloud.google.com/run/docs/configuring/billing-settings) · [Agendamento](https://docs.cloud.google.com/run/docs/triggering/using-scheduler)
 
-Configure um acionamento que processe os eventos pendentes e gere as ocorrências agendadas mesmo com a aplicação ociosa. Após reinício, retome o trabalho a partir dos registros persistidos. No Cloud Run, o Cloud Scheduler pode chamar essa rotina periodicamente.
+Configure o Cloud Scheduler para chamar periodicamente a API no Cloud Run e recuperar entradas que foram persistidas e ficaram sem enfileiramento, inclusive com a aplicação ociosa. Após um reinício, a API usa os registros persistidos para retomar o enfileiramento no Cloud Tasks.
 
-Guarde tokens e credenciais no gerenciador de segredos do ambiente. Persista mensagens, vínculos, chaves de deduplicação e estados de envio em armazenamento durável. No Cloud Run, os arquivos escritos no contêiner são descartados quando a instância para. [Segredos](https://docs.cloud.google.com/run/docs/configuring/services/secrets) · [Armazenamento do contêiner](https://docs.cloud.google.com/run/docs/container-contract#file_system_access)
+Guarde tokens e credenciais no gerenciador de segredos do ambiente. Persista os registros de entrada com seus UUIDs e estados de triagem em armazenamento durável. No Cloud Run, os arquivos escritos no contêiner são descartados quando a instância para. [Segredos](https://docs.cloud.google.com/run/docs/configuring/services/secrets) · [Armazenamento do contêiner](https://docs.cloud.google.com/run/docs/container-contract#file_system_access)

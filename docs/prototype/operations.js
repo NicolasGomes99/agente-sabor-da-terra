@@ -1,4 +1,4 @@
-/* Pedidos, alocações e agendamentos do protótipo. */
+/* Pedidos e alocações do protótipo. */
 window.createPrototypeOperations = function (ctx) {
   "use strict";
 
@@ -15,18 +15,6 @@ window.createPrototypeOperations = function (ctx) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
     const parsed = new Date(`${date}T12:00:00Z`);
     return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ? "" : date;
-  }
-
-  function dateShift(date, days) {
-    const shifted = new Date(`${date}T12:00:00Z`);
-    shifted.setUTCDate(shifted.getUTCDate() + days);
-    if (Number.isNaN(shifted.getTime())) return "";
-    const result = shifted.toISOString();
-    return result[10] === "T" ? result.slice(0, 10) : "";
-  }
-
-  function referenceDay() {
-    return typeof ctx.today === "string" ? isoDate(ctx.today) : ctx.today.toISOString().slice(0, 10);
   }
 
   function itemsFrom(value) {
@@ -97,100 +85,12 @@ window.createPrototypeOperations = function (ctx) {
     const existing = data.operationId && state.orders.find(order => order.operationId === data.operationId);
     if (existing) return existing;
     const order = {
-      ...validateCommon(data), ...orderDates(data), id: uid("PED"), source: data.source || "—",
+      ...validateCommon(data), ...orderDates(data), id: uid("PED"), source: data.source || "-",
       status: "Ativo", allocations: [], operationId: data.operationId || null
     };
     state.orders.push(order);
     save();
     return order;
-  }
-
-  function validateSchedule(data) {
-    const firstDate = isoDate(data.firstDate);
-    const lead = Number(data.lead);
-    if (!firstDate) throw new Error("Informe a primeira data de fornecimento.");
-    if (data.lead === "" || data.lead == null || !Number.isSafeInteger(lead) || lead < 0) {
-      throw new Error("Informe a antecedência em dias inteiros, a partir de zero.");
-    }
-    if (!dateShift(firstDate, -lead) || !dateShift(referenceDay(), lead)) {
-      throw new Error("A antecedência gera uma data fora do intervalo disponível.");
-    }
-    return { ...validateCommon(data), firstDate, lead, recurrence: "Semanal" };
-  }
-
-  function createSchedule(data) {
-    const existing = data.operationId && state.schedules.find(schedule => schedule.operationId === data.operationId);
-    if (existing) return existing;
-    const schedule = {
-      ...validateSchedule(data), id: uid("AG"), source: data.source || "—",
-      status: "Ativo", occurrences: [], operationId: data.operationId || null
-    };
-    state.schedules.push(schedule);
-    syncSchedule(schedule);
-    save();
-    return schedule;
-  }
-
-  function weekdayIndex(date) {
-    return (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
-  }
-
-  function occurrenceWeek(date) {
-    return dateShift(date, -weekdayIndex(date));
-  }
-
-  function recordedWeeks(schedule) {
-    return new Set((schedule.occurrences || []).map(entry => occurrenceWeek(entry.date)));
-  }
-
-  function recordOccurrence(schedule, date, status) {
-    if (recordedWeeks(schedule).has(occurrenceWeek(date))) return false;
-    const entry = { date, status, triageDate: dateShift(date, -Number(schedule.lead)) };
-    if (status === "Gerada") {
-      const existing = state.triage.find(request => request.source === schedule.id && isoDate(request.due) === date);
-      entry.requestId = existing?.id || `${schedule.id}-${date}`;
-      if (!existing) {
-        const items = itemsFrom(schedule.items).map(item => ({ ...item }));
-        const summary = items.map(itemText).join("; ");
-        state.triage.push({
-          id: entry.requestId, state: "Recebida", buyer: schedule.buyer, type: "Ocorrência agendada",
-          channel: "Interno", urgent: date <= dateShift(referenceDay(), 1) ? "Alta" : "Normal",
-          due: dateBR(date), summary, pending: "Confirmar disponibilidade para o fornecimento.",
-          sample: false, source: schedule.id, origin: "agendamento", drafts: ["pedido"], items,
-          conditions: schedule.conditions, analysis: `Fornecimento semanal em ${dateBR(date)}. ${summary}. ${schedule.conditions || ""}`.trim(),
-          original: `Ocorrência de ${schedule.id} para ${dateBR(date)}. ${summary}. ${schedule.conditions || ""}`.trim()
-        });
-      }
-    }
-    schedule.occurrences.push(entry);
-    return true;
-  }
-
-  function syncSchedule(schedule) {
-    let changed = false;
-    if (!schedule.occurrences) {
-      schedule.occurrences = state.triage.filter(request => request.source === schedule.id && isoDate(request.due)).map(request => ({
-        date: isoDate(request.due), triageDate: dateShift(isoDate(request.due), -Number(schedule.lead || 0)),
-        status: "Gerada", requestId: request.id
-      }));
-      changed = true;
-    }
-    const firstDate = isoDate(schedule.firstDate);
-    if (schedule.status === "Cancelado" || !firstDate) return changed;
-    const day = referenceDay();
-    const through = dateShift(day, Number(schedule.lead || 0));
-    const recorded = recordedWeeks(schedule);
-    const cadence = schedule.recurrence === "Quinzenal" ? 14 : 7;
-    for (let date = firstDate; date && date <= through; date = dateShift(date, cadence)) {
-      if (!recorded.has(occurrenceWeek(date))) changed = recordOccurrence(schedule, date, date < day ? "Perdida" : "Gerada") || changed;
-    }
-    return changed;
-  }
-
-  function syncSchedules() {
-    let changed = false;
-    for (const schedule of state.schedules) changed = syncSchedule(schedule) || changed;
-    if (changed) save();
   }
 
   function sameItem(allocation, item, index) {
@@ -257,18 +157,8 @@ window.createPrototypeOperations = function (ctx) {
       table(["Comprador", "Itens", "Fornecimento", "Estado", "Ações"], rows, "Nenhum pedido cadastrado.");
   }
 
-  function scheduleList() {
-    const rows = state.schedules.map(schedule => `<tr>
-      <td><strong>${esc(schedule.buyer)}</strong><span class="ops-subline">${esc(schedule.id)}</span></td>
-      <td>${esc(dateBR(schedule.firstDate))}</td><td>${esc(schedule.recurrence)}</td><td>${esc(schedule.lead)} dias</td>
-      <td>${badge(schedule.status)}</td><td class="ops-row-action">${button("schedule", "Ver agendamento", schedule.id, "small")}</td>
-    </tr>`);
-    return heading("Agendamentos", "Acompanhe os fornecimentos recorrentes e suas datas de triagem.", button("new-schedule", "Novo agendamento", "", "primary")) +
-      table(["Comprador", "Primeiro fornecimento", "Recorrência", "Antecedência", "Estado", "Ações"], rows, "Nenhum agendamento cadastrado.");
-  }
-
   function infoList(rows) {
-    return `<dl class="ops-info">${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${value || "—"}</dd></div>`).join("")}</dl>`;
+    return `<dl class="ops-info">${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${value || "-"}</dd></div>`).join("")}</dl>`;
   }
 
   function section(title, content) {
@@ -296,56 +186,6 @@ window.createPrototypeOperations = function (ctx) {
     </div>`;
   }
 
-  function pendingOccurrences(schedule, limit = 4) {
-    const firstDate = isoDate(schedule.firstDate);
-    if (schedule.status === "Cancelado" || !firstDate) return [];
-    const existing = recordedWeeks(schedule);
-    const pending = [];
-    const today = referenceDay();
-    const cadence = schedule.recurrence === "Quinzenal" ? 14 : 7;
-    for (let date = firstDate; date && pending.length < limit; date = dateShift(date, cadence)) {
-      if (date >= today && !existing.has(occurrenceWeek(date))) {
-        pending.push({ date, triageDate: dateShift(date, -Number(schedule.lead)), status: "Pendente" });
-      }
-    }
-    return pending;
-  }
-
-  function updateSchedule(schedule, data) {
-    const updated = validateSchedule(data);
-    if (updated.firstDate !== isoDate(schedule.firstDate)) {
-      const firstPending = pendingOccurrences(schedule, 1)[0];
-      const firstPendingWeek = firstPending ? occurrenceWeek(firstPending.date) : "";
-      if (firstPendingWeek && occurrenceWeek(updated.firstDate) < firstPendingWeek) {
-        const firstDate = dateShift(firstPendingWeek, weekdayIndex(updated.firstDate));
-        if (!firstDate) throw new Error("A nova data fica fora do intervalo disponível.");
-        updated.firstDate = firstDate;
-      }
-    }
-    Object.assign(schedule, updated);
-    syncSchedule(schedule);
-    save();
-  }
-
-  function scheduleDetail(schedule) {
-    const active = schedule.status !== "Cancelado";
-    const actions = active ? button("edit-schedule", "Editar agendamento", schedule.id, "primary") + button("cancel-schedule", "Cancelar agendamento", schedule.id, "danger") : "";
-    const pending = pendingOccurrences(schedule);
-    const history = [...schedule.occurrences].sort((a, b) => b.date.localeCompare(a.date));
-    const occurrences = [...pending, ...history];
-    const rows = occurrences.map(entry => {
-      let action = "";
-      if (entry.requestId) action = `<button type="button" class="btn small" data-open-chat="${esc(entry.requestId)}">Abrir chat</button>`;
-      if (entry === pending[0]) action = button("simulate-occurrence", "Simular triagem", schedule.id, "small", `data-date="${esc(entry.date)}"`);
-      return `<tr><td>${esc(dateBR(entry.date))}</td><td>${esc(dateBR(entry.triageDate))}</td><td>${badge(entry.status)}</td><td class="ops-row-action">${action}</td></tr>`;
-    });
-    const items = itemsFrom(schedule.items).map(item => `${esc(itemText(item))}${item.condition ? ` · ${esc(item.condition)}` : ""}`).join("<br>");
-    return heading(schedule.buyer, `Agendamento ${schedule.id}`, actions, back("schedules", "Agendamentos")) + `<div class="ops-detail-grid">
-      <section class="ops-occurrences"><h3>Ocorrências</h3>${table(["Fornecimento", "Entrada na triagem", "Estado", "Ações"], rows, "Nenhuma ocorrência registrada.")}</section>
-      ${section("Dados do agendamento", infoList([["Estado", badge(schedule.status)], ["Recorrência", esc(schedule.recurrence)], ["Antecedência", `${esc(schedule.lead)} dias corridos`], ["Itens", items], ["Condições", esc(schedule.conditions)]]))}
-    </div>`;
-  }
-
   function input(label, name, value, attributes = "") {
     return `<label class="field ops-field"><span>${esc(label)}</span><input name="${name}" value="${esc(value)}" ${attributes}></label>`;
   }
@@ -365,21 +205,18 @@ window.createPrototypeOperations = function (ctx) {
     return `<p class="notice error ops-form-error" role="alert" tabindex="-1" hidden></p><div class="form-actions">${cancel}<button class="btn primary" type="submit">${esc(submitLabel)}</button></div>`;
   }
 
-  function orderScheduleForm(record, scheduled) {
-    const view = scheduled ? "schedules" : "orders";
-    const entity = scheduled ? "agendamento" : "pedido";
-    const title = `${record ? "Editar" : "Novo"} ${entity}`;
-    const rows = record ? itemsFrom(record.items).map((item, index) => ({ ...item, id: item.id || `legacy-${index}` })) : [{}];
+  function orderForm(order) {
+    const title = order ? "Editar pedido" : "Novo pedido";
+    const rows = order ? itemsFrom(order.items).map((item, index) => ({ ...item, id: item.id || `legacy-${index}` })) : [{}];
     const productOptions = state.products.map(product => `<option value="${esc(product.name)}"></option>`).join("");
-    const dates = scheduled
-      ? `${input("Primeiro fornecimento", "firstDate", isoDate(record?.firstDate), 'type="date" required')}${input("Antecedência em dias corridos", "lead", record?.lead ?? 2, 'type="number" min="0" step="1" required')}`
-      : `${input("Data de entrega ou início do intervalo", "due", isoDate(record?.due), 'type="date" required')}${input("Fim do intervalo (opcional)", "dueEnd", isoDate(record?.dueEnd), 'type="date"')}`;
-    return heading(title, scheduled ? "Fornecimento semanal" : "", "", back(view, scheduled ? "Agendamentos" : "Pedidos")) + `<form class="card ops-form" data-ops-form="${scheduled ? "schedule" : "order"}" data-id="${esc(record?.id)}">
-      <div class="form-grid">${input("Comprador", "buyer", record?.buyer, "required")}${dates}</div>
+    return heading(title, "", "", back("orders", "Pedidos")) + `<form class="card ops-form" data-ops-form="order" data-id="${esc(order?.id)}">
+      <div class="form-grid">${input("Comprador", "buyer", order?.buyer, "required")}
+        ${input("Data de entrega ou início do intervalo", "due", isoDate(order?.due), 'type="date" required')}
+        ${input("Fim do intervalo (opcional)", "dueEnd", isoDate(order?.dueEnd), 'type="date"')}</div>
       <div class="ops-form-section"><div class="ops-form-section-head"><h3>Itens</h3>${button("add-item", "Adicionar item", "", "small")}</div>
       <datalist id="ops-products">${productOptions}</datalist><div class="ops-item-fields">${rows.map(itemRow).join("")}</div></div>
-      <label class="field ops-field"><span>Condições de atendimento</span><textarea name="conditions" rows="3">${esc(record?.conditions)}</textarea></label>
-      ${formActions(button(record ? (scheduled ? "schedule" : "order") : view, "Voltar", record?.id), record ? "Salvar alterações" : scheduled ? "Salvar agendamento" : "Cadastrar pedido")}
+      <label class="field ops-field"><span>Condições de atendimento</span><textarea name="conditions" rows="3">${esc(order?.conditions)}</textarea></label>
+      ${formActions(button(order ? "order" : "orders", "Voltar", order?.id), order ? "Salvar alterações" : "Cadastrar pedido")}
     </form>`;
   }
 
@@ -404,27 +241,24 @@ window.createPrototypeOperations = function (ctx) {
 
   function render() {
     const detail = state.detail || {};
-    const scheduled = state.view === "schedules";
-    const records = scheduled ? state.schedules : state.orders;
-    const record = records.find(entry => entry.id === detail.id);
-    if (detail.mode === "new") return orderScheduleForm(null, scheduled);
-    if (record && detail.mode === "edit" && record.status !== "Cancelado") return orderScheduleForm(record, scheduled);
-    if (record && !scheduled && detail.mode === "allocation") return allocationForm(record, detail);
-    if (record) return scheduled ? scheduleDetail(record) : orderDetail(record);
-    return scheduled ? scheduleList() : orderList();
+    const order = state.orders.find(entry => entry.id === detail.id);
+    if (detail.mode === "new") return orderForm();
+    if (order && detail.mode === "edit" && order.status !== "Cancelado") return orderForm(order);
+    if (order && detail.mode === "allocation") return allocationForm(order, detail);
+    return order ? orderDetail(order) : orderList();
   }
 
-  function confirmCancel(record, scheduled) {
+  function confirmCancelOrder(order) {
     ctx.confirm({
-      title: scheduled ? "Cancelar agendamento?" : "Cancelar pedido?",
-      message: scheduled ? "As ocorrências pendentes deixam de ser geradas. O histórico continua disponível." : "As alocações deste pedido serão removidas e o pedido continuará disponível para consulta.",
-      label: scheduled ? "Cancelar agendamento" : "Cancelar pedido",
+      title: "Cancelar pedido?",
+      message: "As alocações deste pedido serão removidas e o pedido continuará disponível para consulta.",
+      label: "Cancelar pedido",
       onConfirm() {
-        record.status = "Cancelado";
-        if (!scheduled) record.allocations = [];
+        order.status = "Cancelado";
+        order.allocations = [];
         save();
         ctx.render();
-        toast(scheduled ? "Agendamento cancelado." : "Pedido cancelado.");
+        toast("Pedido cancelado.");
       }
     });
   }
@@ -438,14 +272,11 @@ window.createPrototypeOperations = function (ctx) {
     if (!action) return false;
     const { id, allocation: allocationId } = target.dataset;
     const order = state.orders.find(entry => entry.id === id);
-    const schedule = state.schedules.find(entry => entry.id === id);
     switch (action) {
-      case "orders": case "schedules": navigate(action); break;
+      case "orders": navigate("orders"); break;
       case "order": case "edit-order": navigateTo("orders", action === "order" ? "detail" : "edit", id); break;
-      case "schedule": case "edit-schedule": navigateTo("schedules", action === "schedule" ? "detail" : "edit", id); break;
-      case "new-order": case "new-schedule": navigateTo(action === "new-order" ? "orders" : "schedules", "new"); break;
-      case "cancel-order": if (order) confirmCancel(order, false); break;
-      case "cancel-schedule": if (schedule) confirmCancel(schedule, true); break;
+      case "new-order": navigateTo("orders", "new"); break;
+      case "cancel-order": if (order) confirmCancelOrder(order); break;
       case "source": ctx.openSource(id); break;
       case "add-allocation": case "edit-allocation":
         navigateTo("orders", "allocation", id, { itemIndex: Number(target.dataset.item), allocationId }); break;
@@ -458,16 +289,6 @@ window.createPrototypeOperations = function (ctx) {
           toast("Alocação removida.");
         } });
         break;
-      case "simulate-occurrence": {
-        const date = target.dataset.date;
-        if (!schedule || pendingOccurrences(schedule)[0]?.date !== date) break;
-        if (recordOccurrence(schedule, date, "Gerada")) {
-          save();
-          ctx.render();
-          toast("Ocorrência disponível na triagem.");
-        }
-        break;
-      }
       case "add-item": {
         const fields = target.closest("form").querySelector(".ops-item-fields");
         fields.insertAdjacentHTML("beforeend", itemRow());
@@ -528,25 +349,18 @@ window.createPrototypeOperations = function (ctx) {
 
   function submit(form) {
     const kind = form.dataset.opsForm;
-    if (!kind) return false;
+    if (kind !== "order" && kind !== "allocation") return false;
     const data = new FormData(form);
     try {
-      if (kind === "allocation") saveAllocation(form, data);
-      if (kind === "order") {
+      if (kind === "allocation") {
+        saveAllocation(form, data);
+      } else {
         const input = { buyer: data.get("buyer"), due: data.get("due"), dueEnd: data.get("dueEnd"), conditions: data.get("conditions"), items: formItems(form) };
         const existing = state.orders.find(order => order.id === form.dataset.id);
         if (existing) updateOrder(existing, input);
         const order = existing || createOrder(input);
         navigateTo("orders", "detail", order.id);
         toast(existing ? "Pedido atualizado." : "Pedido cadastrado.");
-      }
-      if (kind === "schedule") {
-        const input = { buyer: data.get("buyer"), firstDate: data.get("firstDate"), lead: data.get("lead"), conditions: data.get("conditions"), items: formItems(form) };
-        const existing = state.schedules.find(schedule => schedule.id === form.dataset.id);
-        if (existing) updateSchedule(existing, input);
-        const schedule = existing || createSchedule(input);
-        navigateTo("schedules", "detail", schedule.id);
-        toast(existing ? "Agendamento atualizado." : "Agendamento cadastrado.");
       }
     } catch (error) {
       formError(form, error.message);
@@ -563,5 +377,5 @@ window.createPrototypeOperations = function (ctx) {
     return true;
   }
 
-  return { render, click, submit, change, createOrder, createSchedule, syncSchedules };
+  return { render, click, submit, change, createOrder };
 };

@@ -10,6 +10,41 @@ import {
 describe('ChatPage sending', () => {
   setupChatPageTests()
 
+  it('sends with Enter', async () => {
+    await renderReadyPage()
+    fireEvent.change(editor(), { target: { value: sentA.content } })
+
+    fireEvent.keyDown(editor(), { key: 'Enter', code: 'Enter' })
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(sessionA.id, { content: sentA.content })
+  })
+
+  it('keeps a line break with Shift+Enter', async () => {
+    await renderReadyPage()
+    fireEvent.change(editor(), { target: { value: 'Linha 1\nLinha 2' } })
+
+    fireEvent.keyDown(editor(), { key: 'Enter', code: 'Enter', shiftKey: true })
+
+    expect(send).not.toHaveBeenCalled()
+    expect(editor().value).toBe('Linha 1\nLinha 2')
+  })
+
+  it('does not send empty or disabled content with Enter', async () => {
+    const pending = deferred<ChatMessage>()
+    send.mockReturnValueOnce(pending.promise)
+    await renderReadyPage()
+
+    fireEvent.keyDown(editor(), { key: 'Enter', code: 'Enter' })
+    expect(send).not.toHaveBeenCalled()
+
+    submit(sentA.content)
+    expect(editor().disabled).toBe(true)
+    fireEvent.keyDown(editor(), { key: 'Enter', code: 'Enter' })
+    expect(send).toHaveBeenCalledExactlyOnceWith(sessionA.id, { content: sentA.content })
+
+    await act(async () => pending.resolve(sentA))
+  })
+
   it('orders resumed messages by persisted position instead of array order', async () => {
     read.mockResolvedValueOnce({
       ...detailA,

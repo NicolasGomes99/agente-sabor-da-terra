@@ -33,15 +33,21 @@ Sua função é analisar mensagens recebidas pela cooperativa e produzir uma an�
 - Apresente TODOS os campos da análise (`summary`, `urgency_reason`, nomes de produtos em `items`, `additional_intents`, `requirements`, `pending_items`) obrigatoriamente em português.
 - Quando a mensagem estiver em inglês, traduza o nome do produto para o português em `product` e preserve o trecho original em `original_mention`.
 
-## Regras deDatas e Prazos (RF02, RF13)
-- Interprete datas relativas ("hoje", "amanhã", "essa sexta", "sábado", "próxima semana") sempre a partir da data de recebimento informada em `<metadados_recebimento>` e na tabela `<calendario_referencia>`, considerando o fuso horário de Pernambuco (`America/Recife`).
+## Regras de Datas, Ações e Prazos (RF02, RF04, RF13)
+- Interprete datas relativas ("hoje", "amanhã", "essa sexta", "sábado", "próxima semana") sempre a partir da data original de recebimento informada em `<metadados_recebimento>` e na tabela `<calendario_referencia>`, considerando o fuso horário de Pernambuco (`America/Recife`).
+- Distinga obrigatoriamente os três tipos de prazo em `extracted_data`:
+  1. `entrega` (`delivery_date_start` / `delivery_date_end` e item em `deadlines` com `action = "entrega"`): quando houver solicitação de entrega de produtos. Para intervalos, use o primeiro dia em `delivery_date_start` e o último em `delivery_date_end`.
+  2. `resposta` (`response_deadline` e item em `deadlines` com `action = "resposta"`): quando o remetente pedir retorno/resposta até determinada data (ex.: "me avisa até amanhã"). NUNCA grave prazo de resposta em `delivery_date_start` se não houver prazo de entrega.
+  3. `disponibilizacao_de_documentos` (`document_availability_date_start` / `document_availability_date_end` e item em `deadlines` com `action = "disponibilizacao_de_documentos"`): quando houver data ou período em que documentos devem estar disponíveis (ex.: inspeção sanitária). Para períodos, considere o primeiro dia em `document_availability_date_start`. NUNCA grave esse prazo em `delivery_date_start`.
 - Verifique se o dia da semana citado na mensagem coincide com a data explícita na tabela `<calendario_referencia>`.
 - Se a data explícita e o dia da semana entrarem em conflito (por exemplo, o remetente escreve "essa sexta (01/nov)" mas no calendário de referência sexta-feira é outra data e 01/nov cai em outro dia da semana):
-  - Marque `has_date_conflict = true`.
+  - Marque `has_date_conflict = true` (e `has_conflict = true` no item correspondente em `deadlines`).
   - Explique claramente quais referências entram em conflito em `date_conflict_description`.
-  - Deixe `delivery_date_start = null` (a menos que uma data única seja inequívoca) e registre uma pendência com categoria `conflito_de_data` perguntando ao funcionário qual data deve prevalecer.
-- Se a entrega for em data única, preencha `delivery_date_start` (formato `AAAA-MM-DD`) e deixe `delivery_date_end = null`.
-- Se a entrega for um intervalo (ex.: de 04 a 08 de novembro de 2026), preencha `delivery_date_start` com o primeiro dia e `delivery_date_end` com o último dia.
+  - Deixe a data conflitante como `null` (ou desconsidere-a na classificação) e registre uma pendência com categoria `conflito_de_data` perguntando ao funcionário qual data deve prevalecer.
+- Se um prazo informado for anterior à data de recebimento, sinalize a inconsistência e desconsidere essa data no cálculo da urgência por prazo.
+- Ao retomar uma conversa com `<historico_sessao_atual>`:
+  - Mantenha dados e prazos já esclarecidos que não foram alterados pelo funcionário.
+  - Se o funcionário informar que um prazo foi alterado, cancelado ou ficou em aberto, atualize ou deixe como `null` sem restaurar a informação invalidada.
 
 ## Regras de Classificação e Intenções (RF04)
 - Classifique `request_type` com a intenção principal:
@@ -54,11 +60,11 @@ Sua função é analisar mensagens recebidas pela cooperativa e produzir uma an�
 
 ## Regras de Urgência (RF04)
 - Marque `declared_urgency = true` se a mensagem contiver pedido explícito de urgência (ex.: "urgente", "máxima urgência", "preciso pra hoje sem falta").
-- A classificação `urgency` segue estritamente:
-  - `urgente`: quando `declared_urgency = true` OU quando a entrega estiver prevista para o próprio dia do recebimento ou para o dia seguinte (para intervalos, considere o primeiro dia `delivery_date_start`).
-  - `normal`: quando a entrega estiver prevista para depois do dia seguinte ao recebimento e `declared_urgency = false`.
-  - `indeterminada`: quando faltarem dados de prazo de entrega (ou houver conflito de datas impeditivo) e `declared_urgency = false`.
-- Registre sempre em `urgency_reason` o motivo claro da urgência em português.
+- Considere o primeiro prazo válido (não conflitante e maior ou igual à data de recebimento) entre entrega, resposta e disponibilização de documentos:
+  - `urgente`: quando `declared_urgency = true` OU quando o primeiro prazo válido (entrega, resposta ou disponibilização de documentos) for para o dia do recebimento ou para o dia seguinte.
+  - `normal`: quando o primeiro prazo válido for posterior ao dia seguinte ao recebimento e `declared_urgency = false`.
+  - `indeterminada`: quando não houver prazo válido (ausente, conflitante ou anterior ao recebimento) e `declared_urgency = false`.
+- Registre em `urgency_basis_action` e `urgency_basis_date` a ação e a data consideradas quando a classificação se basear em prazo, e explique o motivo de forma consistente em `urgency_reason`.
 
 ## Regras de Extração de Pedidos, Condições e Alertas (RF03, RF13, RF37)
 - Extraia em `items` cada produto mencionado, preservando a unidade informada em `unit` sem converter unidades por conta própria.
@@ -109,17 +115,21 @@ def format_triage_prompt(payload: TriageInput) -> str:
         metadata_lines.append(f"comprador_informado: {payload.buyer_name}")
 
     metadata_block = "\n".join(metadata_lines)
-    return (
-        "<metadados_recebimento>\n"
-        f"{metadata_block}\n"
-        "</metadados_recebimento>\n\n"
-        "<calendario_referencia>\n"
-        f"{calendar_context}\n"
-        "</calendario_referencia>\n\n"
-        "<mensagem_recebida>\n"
-        f"{payload.message_text}\n"
-        "</mensagem_recebida>"
+    sections = [
+        f"<metadados_recebimento>\n{metadata_block}\n</metadados_recebimento>",
+        f"<calendario_referencia>\n{calendar_context}\n</calendario_referencia>",
+    ]
+    if payload.conversation_history:
+        history_block = payload.conversation_history
+        if not history_block.startswith("<historico_sessao_atual>"):
+            history_block = (
+                f"<historico_sessao_atual>\n{history_block}\n</historico_sessao_atual>"
+            )
+        sections.append(history_block)
+    sections.append(
+        f"<mensagem_recebida>\n{payload.message_text}\n</mensagem_recebida>"
     )
+    return "\n\n".join(sections)
 
 
 def build_triage_instruction(context: ReadonlyContext) -> str:

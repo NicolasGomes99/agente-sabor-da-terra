@@ -1,19 +1,28 @@
-
 from datetime import UTC, datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     DateTime,
+    Enum,
     ForeignKey,
     Integer,
-    String,
     Text,
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+if TYPE_CHECKING:
+    from .citation import Citation
+
+
+class ChatMessageRole(StrEnum):
+    USER = "USER"
+    AGENT = "AGENT"
 
 
 class ChatMessage(Base):
@@ -36,8 +45,10 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    role: Mapped[str] = mapped_column(
-        String(16), default="user", nullable=False
+    role: Mapped[ChatMessageRole] = mapped_column(
+        Enum(ChatMessageRole, name="chat_message_role", validate_strings=True),
+        default=ChatMessageRole.USER,
+        nullable=False,
     )
 
     content: Mapped[str] = mapped_column(
@@ -52,4 +63,9 @@ class ChatMessage(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
+    )
+
+    citations: Mapped[list["Citation"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
     )
