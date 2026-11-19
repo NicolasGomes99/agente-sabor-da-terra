@@ -8,4 +8,5 @@ Projeto da formação em Agentes de IA da Sauter em parceria com a UPE. O assist
 - [Infraestrutura](docs/infra.md)
 - [Desenvolvimento](docs/desenvolvimento.md)
 - [Integrações de mensagens](docs/intregracoes.md)
+- [Carga da base Facepe](docs/carga-facepe.md)
 - [Roteiro do protótipo navegável](docs/prototype/README.md)
