@@ -87,26 +87,28 @@ Critérios de aceitação:
 - Em uma consulta iniciada no chat sem data informada, o assistente usa a data da consulta e a indica na resposta.
 - A resposta identifica documentos e registros ou trechos que sustentam as afirmações. Consultas sobre certificação verificam validade e produto coberto; consultas sobre lote identificam sua origem registrada.
 - Após a carga de `lotes.csv`, os 20 Lotes ficam disponíveis para consulta com seus identificadores originais e os dados fornecidos de produtor, produto, comprador, pedido histórico, quantidade, unidade identificada, datas, temperatura de transporte, inspeção visual e observações.
-- A consulta ao LOT-2026-0094 informa o fornecimento confirmado de 300 unidades de alface de P004, com colheita em 06/09/2026 e entrega prevista para 08/09/2026. A resposta informa a referência PED-2026-SEP-008 e cita o registro em `lotes.csv`.
+- A consulta ao LOT-2026-0094 informa o fornecimento confirmado de 300 unidades de alface de P004, com colheita em 06/09/2026 e entrega prevista para 08/09/2026. A resposta informa a referência PED-2026-SEP-008 e identifica a fonte como `lotes.csv - LOT-2026-0094`.
 - A referência PED-2026-SEP-008 permanece disponível quando o pedido original estiver ausente da base. A quantidade originalmente solicitada e o prazo combinado são apresentados como desconhecidos quando faltarem registros que os comprovem.
 - No LOT-2026-0099, o assistente preserva a descrição "40 maços (kg)", indica a unidade ambígua e deixa a quantidade fora de somas e conversões até esclarecimento.
 - Preços informam vigência e condições. Informação ausente ou conflitante é explicitada, sem completar a resposta por suposição.
 - A citação permite ler o documento completo na plataforma e baixar o arquivo original usado na resposta.
+- Ao abrir a citação de `lotes.csv - LOT-2026-0094`, o funcionário pode conferir no registro citado o produtor, o produto, a quantidade e as datas usadas na resposta, além de abrir e baixar o CSV original. Ao reabrir o chat, a citação permanece vinculada à mesma resposta, ao mesmo registro e ao arquivo original.
 
 ## US07 - Consultar e baixar o resumo de um produtor
 
 Como funcionário, quero gerar e baixar em PDF um resumo das vendas, dos fornecimentos previstos e das pendências financeiras de um produtor.
 
-Requisitos: RF08, RF18, RF22, RF41; RNF04, RNF06.
+Requisitos: RF06, RF08, RF18, RF22, RF41; RNF04, RNF06.
 
 Critérios de aceitação:
 
 - O resumo identifica produtor, período e data de referência, com fontes dos valores e registros apresentados.
-- O assistente combina os registros financeiros, os Lotes e as alocações operacionais do produtor conforme os critérios de período e data de referência do RF08. O resumo apresenta os resultados dos cálculos obtidos pelas ferramentas da aplicação e suas fontes.
-- Os cálculos financeiros são conferidos com valores esperados a partir dos registros selecionados. Os valores apresentados pelo assistente correspondem aos resultados desses cálculos.
-- O resumo usa a data da transação para selecionar vendas e a data de pagamento para selecionar pagamentos registrados. No PED-2026-012, os R$ 940 de vendas ao Mercado Bom Preço entram em setembro e o pagamento registrado entra em outubro. Quantidades respeitam produto e unidade.
+- O resumo combina os resultados financeiros calculados pela aplicação com os Lotes e as alocações operacionais do produtor, conforme o RF08. A ferramenta consulta todos os registros de `financeiro.csv` indexados que atendam aos critérios de cada cálculo. O resumo apresenta os valores retornados pela ferramenta e os identificadores das transações que os sustentam.
+- Os valores financeiros calculados pela aplicação e apresentados pelo assistente correspondem aos valores esperados a partir dos registros de origem selecionados.
+- O resumo usa a data da transação para selecionar vendas e a data de pagamento para selecionar pagamentos registrados. No resumo da produtora P001 para setembro de 2026, as vendas totalizam R$ 1.090,00 a partir de `FIN-2026-001`, `FIN-2026-002` e `FIN-2026-015`. Os pagamentos registrados em setembro somam R$ 150,00 de `FIN-2026-015`. Os R$ 940,00 de `FIN-2026-001` e `FIN-2026-002` entram nos pagamentos registrados em outubro. As quantidades respeitam produto e unidade.
 - O resumo distingue pendências vencidas e a vencer na data de referência, inclusive as de períodos anteriores. Quando não encontra registros, o assistente informa a ausência. O pagamento registrado, por si só, não comprova repasse bancário.
-- No resumo da produtora P001 com referência em 30/09/2026, os R$ 940 do Mercado Bom Preço aparecem como valor a vencer. O vencimento é em 02/10/2026 e o pagamento consta em 01/10/2026.
+- No resumo da produtora P001 com referência em 30/09/2026, os R$ 940,00 de `FIN-2026-001` e `FIN-2026-002` aparecem como valor a vencer em 02/10/2026. O CSV registra o pagamento em 01/10/2026.
+- No resumo de P004 para setembro de 2026, com referência em 30/09/2026, aparecem R$ 1.020,00 em vendas e R$ 1.020,00 a vencer em 23/10/2026. O resumo e o PDF associam ambos os valores a `financeiro.csv - FIN-2026-006` e `financeiro.csv - FIN-2026-007`.
 - O resumo inclui os lotes importados e as alocações operacionais cuja data prevista de entrega esteja no período solicitado. Mostra a data de cada fornecimento e os totais por produto e unidade. Quantidades ambíguas aparecem como pendências e ficam fora dos totais até esclarecimento.
 - O assistente pede esclarecimento sobre quantidades agregadas ou ambíguas antes de incluí-las nos totais. As conversões de quantidades usadas no resumo dependem de equivalência conhecida.
 - O resumo de P004 para setembro de 2026 apresenta 300 unidades de alface e 150 maços de coentro com entrega prevista para 08/09/2026, citando LOT-2026-0094 e LOT-2026-0095 de `lotes.csv`.
@@ -164,7 +166,6 @@ Critérios de aceitação:
 - O funcionário pode excluir um documento sem citações. O sistema remove o arquivo e retira o documento da lista.
 - O sistema bloqueia a exclusão de um documento citado, preserva o registro e o arquivo e informa ao funcionário qual citação impede a operação.
 - O assistente pode consultar e citar o documento adicionado após o processamento.
-- O sistema preserva as exclusões de documentos importados ao repetir a carga da mesma base.
 
 ## US12 - Gerenciar pedidos
 

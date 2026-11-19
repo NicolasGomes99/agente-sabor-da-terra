@@ -68,6 +68,8 @@ regras de negócio:
 
 - Na triagem, o assistente deve indicar de onde vem cada exigência, identificando a mensagem do pedido, o contrato citado ou ambos, conforme o caso.
 - Ao informar preços ou condições de fornecimento, o assistente deve associar a fonte ao período de vigência e às condições aplicáveis.
+- Ao citar um registro de CSV, o assistente deve identificar o arquivo original e o identificador de origem do registro a partir dos metadados da fonte recuperada. Quando um valor for calculado a partir de vários registros, deve identificar todos os registros usados.
+- O sistema deve permitir que o funcionário consulte, pela citação de um CSV, os campos do registro que sustentam a resposta e acesse o arquivo original conforme o RF17.
 
 ### RF07 - Informar lacunas e divergências nos dados
 
@@ -84,16 +86,17 @@ O assistente deve, quando solicitado, consultar os dados da base para gerar resu
 
 regras de negócio:
 
-- O assistente deve usar os registros financeiros para selecionar as vendas pela data da transação e os pagamentos pela data registrada de pagamento, dentro do período solicitado.
-- O assistente deve incluir nas pendências as vendas feitas até a data de referência cujo pagamento esteja ausente da base ou tenha data posterior à referência. Isso inclui vendas de períodos anteriores.
-- O assistente deve distinguir as pendências vencidas das que vencem na data de referência ou depois.
+- O sistema deve calcular os valores financeiros do resumo a partir de todos os registros de `financeiro.csv` indexados no RAG que atendam aos critérios de produtor, período e data de referência aplicáveis a cada cálculo.
+- O sistema deve selecionar as vendas pela data da transação e os pagamentos pela data registrada de pagamento, dentro do período solicitado.
+- O sistema deve incluir nas pendências as vendas feitas até a data de referência cujo pagamento esteja ausente da base ou tenha data posterior à referência. Isso inclui vendas de períodos anteriores.
+- O sistema deve distinguir as pendências vencidas das que vencem na data de referência ou depois.
 - O assistente deve tratar o pagamento registrado como informação da base, sem usá-lo como comprovação de repasse bancário ao produtor.
 - O assistente deve incluir os lotes importados e as alocações operacionais cuja data prevista de entrega caia no período solicitado, incluindo as datas inicial e final. Deve informar a data de cada fornecimento e citar o registro de origem.
 - O assistente deve desconsiderar no resumo as alocações operacionais removidas após o cancelamento de um pedido e continuar incluindo os Lotes históricos correspondentes ao período solicitado.
 - O assistente deve apresentar os totais de fornecimento previsto por produto e unidade.
 - O assistente deve usar conversões de quantidades apenas quando houver equivalência conhecida.
 - O assistente deve apresentar quantidades agregadas ou ambíguas como pendências e pedir esclarecimento antes de incluí-las nos totais.
-- O assistente deve usar as ferramentas da aplicação para obter os resultados dos cálculos e preservá-los ao redigir o resumo, conforme o RNF04.
+- O sistema deve fornecer ao assistente os resultados dos cálculos e os identificadores das transações financeiras usadas. O assistente deve preservar os valores calculados ao redigir o resumo, conforme o RNF04, e citar os registros que sustentam cada valor financeiro apresentado.
 
 ### RF10 - Manter o contexto da conversa
 
@@ -200,11 +203,11 @@ regras de negócio:
 
 ### RF26 - Indicar o que falta confirmar sobre a disponibilidade
 
-O assistente deve indicar no resumo o que o funcionário ainda precisa confirmar sobre a disponibilidade do produtor.
+Ao sugerir produtores no chat para atender a um pedido, conforme o RF14, o assistente deve indicar, para cada produtor sugerido, o que o funcionário ainda precisa confirmar sobre o fornecimento proposto.
 
 regras de negócio:
 
-- No resumo, o assistente deve distinguir a disponibilidade confirmada dos dados de sazonalidade, das estimativas de capacidade e dos registros de fornecimento da base.
+- Na sugestão, o assistente deve distinguir a disponibilidade confirmada da sazonalidade do produto, da capacidade estimada do produtor e do histórico de fornecimento. A sazonalidade, a capacidade estimada e o histórico podem fundamentar a sugestão. A confirmação deve corresponder ao produto, à quantidade e à data propostos.
 
 ### RF27 - Considerar o saldo a alocar por item
 
@@ -334,7 +337,7 @@ As restrições sanitárias e documentais adotadas pertencem ao cenário simulad
 | RNF03 | O sistema deve evitar registros duplicados em novas tentativas da mesma operação, inclusive no recebimento de mensagens, na confirmação pelo chat e no cadastro de alocações. |
 | RNF04 | O sistema deve calcular os valores financeiros a partir dos registros selecionados. O assistente deve preservar esses resultados ao redigir a resposta. |
 | RNF05 | O sistema deve validar os tokens JWT das consultas e operações internas e rejeitar acessos sem token válido. Antes de processar eventos recebidos por webhook, deve validar sua autenticidade. |
-| RNF06 | O sistema deve disponibilizar os dados e documentos fornecidos por uma carga reproduzível, preservando originais, identificadores e fontes. Deve preservar o valor e a descrição originais das quantidades. A unidade usada deve ser a explícita no registro, mesmo quando o nome da coluna indicar outra. O sistema deve sinalizar unidades ambíguas e manter essas quantidades fora de somas e conversões até esclarecê-las. Ao repetir a mesma carga, deve reaproveitar os registros existentes, manter as lacunas da fonte e preservar as exclusões de documentos feitas pela aplicação. |
+| RNF06 | O sistema deve disponibilizar os dados e documentos fornecidos por uma carga reproduzível, preservando originais, identificadores e fontes. Deve preservar o valor e a descrição originais das quantidades. A unidade usada deve ser a explícita no registro, mesmo quando o nome da coluna indicar outra. O sistema deve sinalizar unidades ambíguas e manter essas quantidades fora de somas e conversões até esclarecê-las. Ao repetir a mesma carga, deve reaproveitar os registros existentes e manter as lacunas da fonte. |
 | RNF07 | O sistema deve receber mensagens por uma interface comum de entrada, aplicando adaptadores quando necessário. |
 | RNF09 | O sistema deve preservar a versão vigente do registro quando rejeitar uma alteração. |
 | RNF10 | O sistema deve preservar análises e esclarecimentos mais recentes quando receber resultados atrasados de tentativas anteriores. |
