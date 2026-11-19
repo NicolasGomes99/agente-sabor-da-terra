@@ -5,7 +5,6 @@ import { useAuth } from '../../features/auth/useAuth'
 const navigationItems = [
   { label: 'Triagem', available: false },
   { label: 'Pedidos', available: false },
-  { label: 'Agendamentos', available: false },
   { label: 'Cadastros', available: false },
 ]
 

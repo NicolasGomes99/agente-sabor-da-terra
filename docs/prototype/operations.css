@@ -77,14 +77,9 @@
 }
 
 .ops-item-head h4,
-.ops-form-section-head h3,
-.ops-occurrences h3 {
+.ops-form-section-head h3 {
   margin: 0;
   font-size: 1.02em;
-}
-
-.ops-occurrences h3 {
-  margin: 0 0 12px;
 }
 
 .ops-item-head p,

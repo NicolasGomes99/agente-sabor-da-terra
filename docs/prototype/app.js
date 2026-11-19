@@ -6,8 +6,7 @@
   const app = document.getElementById("app");
   const state = load();
   const filters = { search: "", status: "", urgency: "", type: "", channel: "" };
-  const triageStates = ["Recebida", "Em análise", "Aguardando informações", "Pronta para decisão", "Encerrada"];
-  const requestsInAnalysis = new Set();
+  const triageStates = ["Recebida", "Em análise", "Finalizada"];
   let searchOpen = false;
   let triageScroll = 0;
   let dialog = null;
@@ -17,7 +16,32 @@
 
   function load() {
     try {
-      return { ...window.prototypeSeed, ...JSON.parse(localStorage.getItem(STORAGE) || "{}") };
+      const savedState = JSON.parse(localStorage.getItem(STORAGE) || "{}");
+      const restoredState = { ...window.prototypeSeed, ...savedState };
+      if (restoredState.view === "schedules") {
+        restoredState.view = "triage";
+        restoredState.detail = null;
+      }
+      const previousStates = new Map([
+        ["Aguardando informações", "Em análise"],
+        ["Pronta para decisão", "Em análise"],
+        ["Encerrada", "Finalizada"]
+      ]);
+      restoredState.triage = restoredState.triage.map(request => {
+        const state = previousStates.get(request.state) ?? request.state;
+        if (request.urgent === "Alta") return { ...request, state, urgent: "Urgente" };
+        if (request.urgent === "Vencida") {
+          const sample = window.prototypeSeed.triage.find(entry => entry.id === request.id);
+          return { ...request, state, urgent: sample?.urgent ?? "Indeterminada", urgencyReason: sample?.urgencyReason };
+        }
+        return { ...request, state };
+      });
+      const existingIds = new Set(restoredState.triage.map(request => request.id));
+      const newSamples = window.prototypeSeed.triage.filter(request =>
+        ["PED-2026-014", "PED-2026-015"].includes(request.id) && !existingIds.has(request.id)
+      );
+      restoredState.triage.push(...newSamples.map(request => ({ ...request })));
+      return restoredState;
     } catch {
       return { ...window.prototypeSeed };
     }
@@ -37,12 +61,7 @@
   }
 
   function dateBR(value) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value.split("-").reverse().join("/") : value || "—";
-  }
-
-  function isoDate(value) {
-    return /^\d{2}\/\d{2}\/\d{4}$/.test(value || "") ? value.split("/").reverse().join("-") :
-      /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value : "";
+    return /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value.split("-").reverse().join("/") : value || "-";
   }
 
   function badge(value, tone) {
@@ -73,7 +92,6 @@
       chevron: '<path d="m9 6 6 6-6 6"/>',
       inbox: '<path d="M4 4h16l2 10v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-5z"/><path d="M2 14h6l2 3h4l2-3h6"/>',
       orders: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 9h6m-6 4h6m-6 4h4"/>',
-      calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18"/>',
       registry: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18m4-13h4m-4 4h4"/>',
       logout: '<path d="M10 4H4v16h6m-1-8h12m-5-5 5 5-5 5"/>',
       filter: '<path d="M4 6h16M7 12h10m-7 6h4"/>',
@@ -91,13 +109,11 @@
   }
 
   const ctx = {
-    state, today, esc, badge, icon, dateBR, toast, uid, save, render, navigate, openSource, downloadPDF, confirm,
-    startRequestAnalysis, reviewRequest
+    state, today, esc, badge, icon, dateBR, toast, uid, save, render, navigate, openSource, downloadPDF, confirm
   };
   const operations = window.createPrototypeOperations(ctx);
   const registry = window.createPrototypeRegistry(ctx);
   ctx.createOrder = (...args) => operations.createOrder(...args);
-  ctx.createSchedule = (...args) => operations.createSchedule(...args);
   ctx.citationId = id => registry.citationId(id);
   const chat = window.createPrototypeChat(ctx);
   const modules = [chat, operations, registry];
@@ -128,7 +144,6 @@
       <nav class="nav" aria-label="Navegação principal">
         ${navButton("triage", "Triagem", "inbox")}
         ${navButton("orders", "Pedidos", "orders")}
-        ${navButton("schedules", "Agendamentos", "calendar")}
         ${navButton("registry", "Cadastros", "registry")}
       </nav>
       ${state.view === "chat" && !collapsed ? '<div class="sidebar-history">' + chat.history() + '</div>' : ""}
@@ -156,7 +171,6 @@
       app.innerHTML = login();
       return;
     }
-    state.triage.forEach(startRequestAnalysis);
     const chatting = state.view === "chat";
     const content = chatting ? chat.render() : state.view === "triage" ? triagePage() :
       state.view === "registry" ? registry.render() : operations.render();
@@ -176,11 +190,12 @@
   }
 
   function triagePage() {
-    const count = matchingRequests().length;
-    const types = [...new Set(state.triage.map(request => request.type))];
-    const channels = [...new Set(state.triage.map(request => request.channel))];
+    const queue = triageQueue();
+    const matches = matchingRequests(queue);
+    const types = [...new Set(queue.map(request => request.type))];
+    const channels = [...new Set(queue.map(request => request.channel))];
     return `<header class="page-heading triage-heading">
-      <div><h1>Triagem</h1><p id="triage-count" aria-live="polite">${requestCount(count)}</p></div>
+      <div><h1>Triagem</h1><p id="triage-count" aria-live="polite">${requestCount(matches.length)}</p></div>
       <div class="triage-controls">
         <div class="triage-search${searchOpen || filters.search ? " expanded" : ""}">
           <button class="icon-button" type="button" data-ui="search" aria-label="Buscar solicitações" title="Buscar solicitações" aria-controls="triage-search" aria-expanded="${Boolean(searchOpen || filters.search)}">${icon("search")}</button>
@@ -190,7 +205,7 @@
           <summary class="icon-button" aria-label="Filtros da triagem" title="Filtros da triagem">${filterIcon()}</summary>
           <div class="filter-popover">
             <div class="field"><label for="triage-status">Estado</label><select id="triage-status"><option value="">Todos</option>${options(triageStates, filters.status)}</select></div>
-            <div class="field"><label for="triage-urgency">Urgência</label><select id="triage-urgency"><option value="">Todas</option>${options(["Alta", "Normal", "Indeterminada", "Vencida"], filters.urgency)}</select></div>
+            <div class="field"><label for="triage-urgency">Urgência</label><select id="triage-urgency"><option value="">Todas</option>${options(["Urgente", "Normal", "Indeterminada"], filters.urgency)}</select></div>
             <div class="field"><label for="triage-type">Tipo</label><select id="triage-type"><option value="">Todos</option>${options(types, filters.type)}</select></div>
             <div class="field"><label for="triage-channel">Canal</label><select id="triage-channel"><option value="">Todos</option>${options(channels, filters.channel)}</select></div>
           </div>
@@ -198,7 +213,7 @@
         <button class="btn primary" data-ui="register">${icon("plus")} Registrar mensagem</button>
       </div>
     </header>
-    <div id="triage-results" class="request-grid">${triageCards()}</div>`;
+    <div id="triage-results" class="request-grid">${triageCards(matches)}</div>`;
   }
 
   function options(values, selected) {
@@ -217,40 +232,35 @@
     return icon("filter") + (filters.status || filters.urgency || filters.type || filters.channel ? '<span class="filter-dot"></span>' : "");
   }
 
-  function matchingRequests() {
+  function triageQueue() {
+    return state.triage.filter(request => request.origin !== "agendamento" && request.type !== "Ocorrência agendada");
+  }
+
+  function matchingRequests(requests = triageQueue()) {
     const query = normalize(filters.search.trim());
-    return state.triage.filter(request =>
+    return requests.filter(request =>
       (!filters.status || request.state === filters.status) &&
-      (!filters.urgency || (filters.urgency === "Vencida" ? isOverdue(request) : request.urgent === filters.urgency)) &&
+      (!filters.urgency || request.urgent === filters.urgency) &&
       (!filters.type || request.type === filters.type) &&
       (!filters.channel || request.channel === filters.channel) &&
       normalize([request.buyer, request.id, request.summary, request.type, request.channel].join(" ")).includes(query)
     );
   }
 
-  function isOverdue(request) {
-    const lastDay = isoDate(request.dueEnd || request.due);
-    return lastDay ? lastDay < today.toISOString().slice(0, 10) : request.urgent === "Vencida";
-  }
-
   function triageCards(records = matchingRequests()) {
     if (!records.length) return '<div class="empty request-empty">Nenhuma solicitação encontrada.</div>';
     return records.map(request => {
-      const urgency = request.urgent === "Alta" ? badge("Urgente", "red") : "";
-      const overdue = isOverdue(request) ? badge("Prazo vencido", "red") : "";
-      const deadline = request.due && request.due !== "—" ? dateBR(request.due) : "";
-      const deadlineEnd = isoDate(request.dueEnd) ? dateBR(request.dueEnd) : "";
+      const urgency = badge(request.urgent, request.urgent === "Urgente" ? "red" : "gray");
       return `<article class="request-card">
-        <div class="request-top"><span>${esc(request.type)}</span>${urgency && request.urgencyReason ? `<span title="${esc(request.urgencyReason)}" aria-label="${esc(request.urgencyReason)}">${urgency}</span>` : urgency || overdue || badge(request.state, request.state === "Aguardando informações" ? "amber" : "gray")}</div>
+        <div class="request-top"><span>${esc(request.type)}</span>${urgency}</div>
         <h2>${esc(request.buyer)}</h2>
         <p class="request-summary">${esc(request.summary)}</p>
         ${request.result ? `<p class="request-result">${esc(request.result)}</p>` : ""}
-        ${request.pending ? `<p class="request-pending"><span aria-hidden="true"></span>${esc(request.pending)}</p>` : ""}
         <div class="request-bottom">
-          <div class="request-meta">${esc(request.id)} · ${esc(request.channel)}${request.sample ? " · Amostra" : ""}${deadline ? `<span>Prazo ${esc(deadline)}${deadlineEnd && deadlineEnd !== deadline ? " a " + esc(deadlineEnd) : ""}</span>` : ""}${urgency || overdue ? '<span>' + esc(request.state) + '</span>' : ""}${urgency && overdue ? overdue : ""}</div>
+          <div class="request-meta">${esc(request.id)} · ${esc(request.channel)}${request.sample ? " · Amostra" : ""}<span>${esc(request.state)}</span></div>
           <div class="request-actions">
             <button class="request-link" data-ui="request" data-id="${esc(request.id)}">${request.origin === "pedido" ? "Abrir chat sobre esse pedido" : "Abrir chat"} ${icon("arrow-right")}</button>
-            ${request.state === "Encerrada" ? "" : `<button class="btn small" data-ui="close-request" data-id="${esc(request.id)}">Encerrar</button>`}
+            ${request.state === "Finalizada" ? "" : `<button class="btn small" data-ui="close-request" data-id="${esc(request.id)}">Encerrar</button>`}
           </div>
         </div>
       </article>`;
@@ -270,36 +280,6 @@
     if (count) count.textContent = requestCount(records.length);
     const filterButton = app.querySelector(".triage-filters summary");
     if (filterButton) filterButton.innerHTML = filterIcon();
-  }
-
-  function showRequestState(request) {
-    if (!dialog) refreshTriage();
-    const indicator = app.querySelector(`[data-triage-state="${CSS.escape(request.id)}"]`);
-    if (indicator) indicator.textContent = request.state;
-  }
-
-  function reviewRequest(request) {
-    if (request.state === "Encerrada") return;
-    request.state = request.pending && request.pendingBlocksDecision !== false ?
-      "Aguardando informações" : "Pronta para decisão";
-    save();
-    showRequestState(request);
-  }
-
-  function startRequestAnalysis(request) {
-    if (requestsInAnalysis.has(request.id) || !["Recebida", "Em análise"].includes(request.state)) return;
-    requestsInAnalysis.add(request.id);
-    setTimeout(() => {
-      if (request.state === "Recebida") {
-        request.state = "Em análise";
-        save();
-        showRequestState(request);
-      }
-      setTimeout(() => {
-        requestsInAnalysis.delete(request.id);
-        if (request.state === "Em análise") reviewRequest(request);
-      }, 450);
-    }, 250);
   }
 
   function showDialog(next) {
@@ -345,18 +325,18 @@
   }
 
   function closeRequest(request) {
-    if (!request || request.state === "Encerrada") return;
+    if (!request || request.state === "Finalizada") return;
     showDialog({ kind: "close-request", id: request.id });
   }
 
   function submitRequestClosure(form) {
     const request = state.triage.find(entry => entry.id === dialog?.id);
-    if (!request || request.state === "Encerrada") return;
+    if (!request || request.state === "Finalizada") return;
     const result = form.elements.result.value.trim();
     if (!result) return showFormError(form, "Informe o resultado da triagem.", form.elements.result);
     request.result = result;
     request.closedAt = new Date().toISOString();
-    request.state = "Encerrada";
+    request.state = "Finalizada";
     save();
     closeDialog();
     if (state.view === "chat") render();
@@ -432,10 +412,13 @@
     const receivedDay = today.toISOString().slice(0, 10);
     const followingDay = new Date(today.getTime() + 86400000).toISOString().slice(0, 10);
     const declaredUrgent = /\b(?:urgente(?:mente)?|urg[eê]ncia)\b/i.test(original);
+    const urgent = declaredUrgent || due === receivedDay || due === followingDay ? "Urgente" :
+      due > followingDay ? "Normal" : "Indeterminada";
     const urgencyReason = declaredUrgent ? "Urgência informada na mensagem." :
       due === receivedDay ? "Entrega prevista para o dia do recebimento." :
-      due === followingDay ? "Entrega prevista para o dia seguinte ao recebimento." : "";
-    const urgent = urgencyReason ? "Alta" : due > followingDay ? "Normal" : "Indeterminada";
+      due === followingDay ? "Entrega prevista para o dia seguinte ao recebimento." :
+      urgent === "Normal" ? "Entrega prevista para depois do dia seguinte ao recebimento." :
+      due ? "O prazo informado é anterior ao recebimento." : "A mensagem chegou sem prazo definido e sem urgência declarada.";
     const needsDeadline = purchase && (!due || (dueEnd || due) < receivedDay);
     const pending = needsDeadline ? (due ? "Confirme uma nova data de entrega." : "Informe o prazo de entrega.") :
       type === "Não identificado" ? "Esclareça a intenção do remetente." : "";
@@ -452,7 +435,6 @@
     state.triage.unshift(request);
     closeDialog();
     save();
-    startRequestAnalysis(request);
     toast("Mensagem registrada na triagem.");
   }
 
@@ -487,7 +469,7 @@
       }
       return [...wrapped, line];
     });
-    const encode = line => Array.from(line.replace(/—|–/g, "-").replace(/…/g, "...")).map(character => {
+    const encode = line => Array.from(line.replace(/[\u2013\u2014]/g, "-").replace(/…/g, "...")).map(character => {
       const code = character.charCodeAt(0);
       return (code <= 255 ? code : 63).toString(16).padStart(2, "0");
     }).join("");
@@ -522,7 +504,6 @@
       return;
     }
     if (button.dataset.view) return navigate(button.dataset.view);
-    if (button.dataset.openChat) return chat.openRequest(button.dataset.openChat);
     switch (button.dataset.ui) {
       case "sidebar":
         state.sidebarCollapsed = !state.sidebarCollapsed;
@@ -599,6 +580,5 @@
     }
   });
 
-  operations.syncSchedules?.();
   render();
 })();

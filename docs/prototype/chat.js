@@ -3,7 +3,6 @@
 
   const draftLabels = {
     pedido: "Rascunho de pedido",
-    agendamento: "Rascunho de agendamento",
     resposta: "Rascunho de resposta",
     notificacao: "Rascunho de notificação"
   };
@@ -11,7 +10,6 @@
   const integratedChannels = ["E-mail", "WhatsApp", "Telegram"];
   const reviewLabels = {
     pedido: "Revisar pedido",
-    agendamento: "Revisar agendamento",
     resposta: "Revisar resposta",
     notificacao: "Revisar notificação"
   };
@@ -44,7 +42,7 @@
     const [first, second] = dates;
     if (!second) return { due: dateInput(first[0]) };
     const separator = wording.slice(first.index + first[0].length, second.index).trim();
-    return { due: dateInput(first[0]), dueEnd: /^(?:a|ate|e|[-–—])$/.test(separator) ? dateInput(second[0]) : "" };
+    return { due: dateInput(first[0]), dueEnd: /^(?:a|ate|e|[-\u2013\u2014])$/.test(separator) ? dateInput(second[0]) : "" };
   }
 
   function draftItems(value) {
@@ -91,16 +89,14 @@
     function openRequest(id) {
       const request = state.triage.find((entry) => entry.id === id);
       if (!request) return;
-      ctx.startRequestAnalysis(request);
+      if (request.state === "Recebida") request.state = "Em análise";
       let conversation = state.conversations.find((entry) => entry.requestId === id);
       if (!conversation) {
-        const text = [request.analysis || request.summary, request.pending && request.state !== "Encerrada" && `Pendência: ${request.pending}`]
-          .filter(Boolean).join("\n\n");
         conversation = {
           id,
           title: request.buyer,
           requestId: id,
-          messages: [message("agent", text, {
+          messages: [message("agent", request.analysis || request.summary, {
             citation: request.analysisDocumentId ? ctx.citationId(request.analysisDocumentId) : undefined,
             actions: (request.drafts || []).map((kind) => ({ kind }))
           })]
@@ -133,6 +129,29 @@
         button("suggest", esc(label), `data-chat-text="${esc(text)}"`)).join("")}</div></div>`;
     }
 
+    function triageAnalysisText(text, request) {
+      const actionDate = dateInput(request.deadline?.date);
+      const due = dateInput(request.due);
+      const end = dateInput(request.dueEnd);
+      const delivery = ["pedido", "agendamento"].includes(request.origin);
+      const period = end && end !== due ? `de ${dateBR(due)} a ${dateBR(end)}` : `em ${dateBR(due)}`;
+      const deadline = actionDate ? `${request.deadline.action} até ${dateBR(actionDate)}` :
+        due && `${delivery ? "Entrega" : "Prazo informado"} ${period}`;
+      const currentPending = request.state !== "Finalizada" ? request.pending : "";
+      const savedPending = text.match(/\n\nPendência: ([^\n]+)$/);
+      const analysis = savedPending ? text.slice(0, savedPending.index) : text;
+      const initialPending = savedPending?.[1];
+      const urgencyReason = request.urgencyReason || "Motivo indisponível na análise original.";
+
+      return [
+        analysis,
+        deadline && `Prazo identificado - ${deadline}`,
+        request.urgent && `Classificação de urgência - ${request.urgent}. ${urgencyReason}`,
+        initialPending && initialPending !== currentPending && `Pendência inicial - ${initialPending}`,
+        currentPending && `Pendência em aberto - ${currentPending}`
+      ].filter(Boolean).join("\n\n");
+    }
+
     function renderChat() {
       const conversation = activeConversation();
       const request = requestFor(conversation);
@@ -140,11 +159,11 @@
       return `<section class="chat-workspace ${hasMessages ? "" : "chat-workspace-empty"}" aria-label="Conversa com o assistente">
         <header class="chat-topline">
           <div class="chat-topline-title"><h1>${esc(conversation?.title || "Novo chat")}</h1>
-          ${request ? `<p>${esc(request.id)} · ${esc(request.channel)}${request.sample ? " · Amostra" : ""} · <span data-triage-state="${esc(request.id)}">${esc(request.state)}</span></p>` : ""}</div>
+          ${request ? `<p>${esc(request.id)} · ${esc(request.channel)}${request.sample ? " · Amostra" : ""} · ${esc(request.state)}</p>` : ""}</div>
           ${request ? button("source", "Ver mensagem original", `data-chat-id="${esc(request.id)}"`) : ""}
         </header>
         <div class="chat-scroll" id="chat-scroll" role="log" aria-label="Histórico da conversa" aria-live="polite">
-          <div class="chat-transcript">${hasMessages ? conversation.messages.map(renderMessage).join("") : startScreen()}</div>
+          <div class="chat-transcript">${hasMessages ? conversation.messages.map((entry, index) => renderMessage(entry, index, request)).join("") : startScreen()}</div>
         </div>
         <footer class="chat-compose-area"><form class="chat-compose" data-chat-form="composer">
           <label class="chat-sr-only" for="composer-input">Mensagem para o assistente</label>
@@ -154,20 +173,20 @@
       </section>`;
     }
 
-    function renderMessage(entry, index) {
+    function renderMessage(entry, index, request) {
       const user = entry.role === "user";
+      const text = request && index === 0 && !user ? triageAnalysisText(entry.text, request) : entry.text;
       const document = state.documents.find((doc) => doc.id === entry.citation);
       const source = entry.citation ? button("source", esc(entry.citationLabel || document?.name || entry.citation), `data-chat-id="${esc(entry.citation)}"`) : "";
       const pdf = entry.downloadSummary ? button("pdf", "Baixar resumo em PDF", `data-chat-index="${index}"`) : "";
       const go = entry.orderId ? button("order", "Abrir pedido", `data-chat-id="${esc(entry.orderId)}"`) : "";
-      const schedule = entry.scheduleId ? button("schedule", "Abrir agendamento", `data-chat-id="${esc(entry.scheduleId)}"`) : "";
       const actions = (entry.actions || []).map(({ kind, label }) => draftLabels[kind]
         ? button("draft", esc(label || reviewLabels[kind]), `data-chat-kind="${kind}"`, "chat-button-plain")
         : "").join("");
-      const attachments = source + pdf + go + schedule + actions;
+      const attachments = source + pdf + go + actions;
       return `<article class="conversation-message ${user ? "conversation-message-user" : "conversation-message-agent"}">
         <span class="chat-message-label">${user ? "Você" : "Assistente"}</span>
-        <div class="chat-message-text">${esc(entry.text)}</div>
+        <div class="chat-message-text">${esc(text)}</div>
         ${attachments ? `<div class="chat-message-actions">${attachments}</div>` : ""}
         ${entry.draft ? renderDraft(entry.draft, index) : ""}
       </article>`;
@@ -179,26 +198,23 @@
       if (draft.completed) {
         return `<section class="writing-block writing-block-complete"><h3>${title}</h3><p>${esc(draft.completed)}</p></section>`;
       }
-      const isSchedule = draft.kind === "agendamento";
       const isSending = draft.kind === "resposta" || draft.kind === "notificacao";
       const fields = isSending ? renderSendFields(draft) : `<div class="writing-fields">
-        <label${isSchedule ? "" : ' class="writing-full"'}>Comprador<input name="buyer" required value="${esc(draft.buyer)}"></label>
-        <label>${isSchedule ? "Primeiro fornecimento" : "Data de entrega ou início do intervalo"}<input type="date" name="due" value="${esc(draft.due)}" required></label>
-        ${isSchedule ? "" : `<label>Fim do intervalo (opcional)<input type="date" name="dueEnd" value="${esc(draft.dueEnd)}"></label>`}
+        <label class="writing-full">Comprador<input name="buyer" required value="${esc(draft.buyer)}"></label>
+        <label>Data de entrega ou início do intervalo<input type="date" name="due" value="${esc(draft.due)}" required></label>
+        <label>Fim do intervalo (opcional)<input type="date" name="dueEnd" value="${esc(draft.dueEnd)}"></label>
         <fieldset class="writing-items writing-full"><legend>Itens</legend>
           <div data-writing-items>${(draftItems(draft.items).length ? draftItems(draft.items) : [{}]).map(renderDraftItem).join("")}</div>
           ${button("add-item", "Adicionar item")}
         </fieldset>
-        ${isSchedule ? `<label>Antecedência em dias<input name="lead" type="number" min="0" value="${esc(draft.lead)}" required></label><label>Recorrência<input value="Semanal" readonly></label>` : ""}
         <label class="writing-full">Condições de atendimento<textarea name="conditions" rows="2">${esc(draft.conditions)}</textarea></label>
       </div>`;
-      const submitLabel = isSchedule ? "Salvar agendamento" : "Cadastrar pedido";
       return `<form class="writing-block" id="chat-draft-${index}" data-chat-form="review" data-chat-index="${index}">
         <header><h3>${title}</h3><span>Em revisão</span></header>
         <div class="writing-body">${fields}<p class="writing-error" role="alert" hidden></p></div>
         <footer>${isSending
           ? `${button("copy", "Copiar resposta")}${draft.sendAllowed ? '<button class="chat-button chat-button-primary" type="submit">Enviar na demonstração</button>' : ""}`
-          : `<button class="chat-button chat-button-primary" type="submit">${submitLabel}</button>`}</footer>
+          : '<button class="chat-button chat-button-primary" type="submit">Cadastrar pedido</button>'}</footer>
       </form>`;
     }
 
@@ -241,7 +257,7 @@
         <option value="${esc(producer.id)}" ${producer.id === draft.producerId ? "selected" : ""}>${esc(producer.name)} · ${esc(producer.contact)}</option>`).join("")}</select></label>`
         : `<label>Destinatário<input value="${esc(draft.to || "Sem destino de envio")}" readonly></label>`;
       const notice = draft.reason ? `<p class="writing-hint writing-full">${esc(draft.reason)}</p>` : "";
-      return `<div class="writing-fields">${destinations}<label>Canal<input value="${esc(draft.channel || "—")}" readonly></label>
+      return `<div class="writing-fields">${destinations}<label>Canal<input value="${esc(draft.channel || "-")}" readonly></label>
         ${notice}<label class="writing-full">${isNotification ? "Notificação" : "Resposta"}
         <textarea name="text" rows="4" required>${esc(draft.text)}</textarea></label></div>`;
     }
@@ -266,8 +282,7 @@
       const samples = {
         "PED-2026-003": "Tomate | 200 | kg",
         "PED-2026-004": "Mel orgânico | 15 | potes | Certificação orgânica vigente\nBanana | 30 | kg",
-        "PED-2026-011": "Couve | 80 | maços\nMandioca | 40 | kg",
-        "AG-2026-001": "Hortaliças variadas | 40 | kg"
+        "PED-2026-011": "Couve | 80 | maços\nMandioca | 40 | kg"
       };
       return samples[request?.id] || "";
     }
@@ -303,10 +318,9 @@
         kind,
         buyer: request?.buyer || "",
         due: revised || (hasValidDeadline ? supplied.due : ""),
-        dueEnd: kind === "pedido" ? (revised ? dateInput(conversation.confirmedDateEnd) : (hasValidDeadline && supplied.dueEnd) || "") : "",
+        dueEnd: revised ? dateInput(conversation.confirmedDateEnd) : (hasValidDeadline && supplied.dueEnd) || "",
         items: requestItems(request),
-        conditions: request?.conditions || "",
-        lead: 2
+        conditions: request?.conditions || ""
       };
     }
 
@@ -330,7 +344,6 @@
       if (/resumo|vendas/.test(text)) return producerSummary(prompt);
       if (/notificac|notifiqu/.test(text)) return { draft: createDraft("notificacao", request, conversation) };
       if (/rascunho.*respost|respost|responda/.test(text)) return { draft: createDraft("resposta", request, conversation) };
-      if (/agend|recorr/.test(text)) return { draft: createDraft("agendamento", request, conversation) };
       if (/rascunho.*pedido|cadastrar pedido|criar pedido/.test(text)) return { draft: createDraft("pedido", request, conversation) };
       if (/capacidade|produtor/.test(text) && /tomate/.test(`${text} ${normalize(request?.summary)}`)) {
         return capacitySuggestion();
@@ -364,11 +377,10 @@
           }
         }
         const reference = typeof ctx.today === "string" ? dateInput(ctx.today) : ctx.today.toISOString().slice(0, 10);
-        if (request.state !== "Encerrada" && (request.pendingField === "due" || request.id === "PED-2026-003") && (dueEnd || due) >= reference) {
+        if (request.state !== "Finalizada" && (request.pendingField === "due" || request.id === "PED-2026-003") && (dueEnd || due) >= reference) {
           request.pending = "";
           request.pendingField = "";
         }
-        ctx.reviewRequest(request);
         return {
           text: `Registrei ${dueEnd ? `o intervalo de ${dateBR(due)} a ${dateBR(dueEnd)}` : `a data de ${dateBR(due)}`} no rascunho. Confira o prazo antes de cadastrar.`,
           actions
@@ -479,29 +491,28 @@
       if (!draft || draft.completed) return;
       const values = new FormData(form);
       if (draft.kind === "resposta" || draft.kind === "notificacao") return confirmSend(form, draft, conversation, values);
+      if (draft.kind !== "pedido") return;
       const items = readDraftItems(form);
       const buyer = String(values.get("buyer") || "").trim();
       const due = dateInput(values.get("due"));
-      const isSchedule = draft.kind === "agendamento";
-      const dueEnd = isSchedule ? "" : dateInput(values.get("dueEnd"));
+      const dueEnd = dateInput(values.get("dueEnd"));
       if (!items.length || !buyer || !due || items.some(item => !item.name || !item.unit || Number(item.qty) <= 0)) {
         return showError(form, "Informe comprador, prazo e itens com produto, quantidade positiva e unidade.");
       }
-      if (!isSchedule && values.get("dueEnd") && (!dueEnd || dueEnd < due)) {
+      if (values.get("dueEnd") && (!dueEnd || dueEnd < due)) {
         return showError(form, "Informe um fim de intervalo igual ou posterior à data inicial.");
       }
       const request = requestFor(conversation);
-      const details = { buyer, due, items, conditions: String(values.get("conditions") || "").trim(), source: request?.id || "—" };
+      const details = { buyer, due, dueEnd, items, conditions: String(values.get("conditions") || "").trim(), source: request?.id || "-" };
       let result;
       try {
-        result = isSchedule ? ctx.createSchedule({ ...details, firstDate: due, lead: Number(values.get("lead")) }) : ctx.createOrder({ ...details, dueEnd });
+        result = ctx.createOrder(details);
       } catch (error) {
         return showError(form, error.message);
       }
       if (!result || result.error) return showError(form, result?.error || "Não foi possível salvar o registro.");
-      draft.completed = `${isSchedule ? "Agendamento salvo" : "Pedido cadastrado"} · ${result.id}`;
-      conversation.messages.push(message("agent", `${isSchedule ? "Agendamento" : "Pedido"} ${result.id} confirmado.`,
-        isSchedule ? { scheduleId: result.id } : { orderId: result.id }));
+      draft.completed = `Pedido cadastrado · ${result.id}`;
+      conversation.messages.push(message("agent", `Pedido ${result.id} confirmado.`, { orderId: result.id }));
       save();
       scrollToEnd = true;
       render();
@@ -536,7 +547,6 @@
         case "remove-item": editDraftItems(element, false); break;
         case "pdf": downloadPDF(activeConversation()?.messages[Number(element.dataset.chatIndex)]?.text); break;
         case "order": navigate("orders", { mode: "detail", id: element.dataset.chatId }); break;
-        case "schedule": navigate("schedules", { mode: "detail", id: element.dataset.chatId }); break;
         case "copy": copyReview(element.closest("form")); break;
         default: return false;
       }
