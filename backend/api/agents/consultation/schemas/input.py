@@ -94,7 +94,14 @@ class ConsultationInput(BaseModel):
     )
     sources: list[ConsultationSourceItem] = Field(
         default_factory=list,
-        description="Trechos documentais e registros recuperados para a consulta.",
+        description="Trechos documentais e registros recuperados por busca para a consulta.",
+    )
+    financial_records: list[ConsultationSourceItem] | None = Field(
+        default=None,
+        description=(
+            "Coleção exaustiva de todos os registros de financeiro.csv indexados no RAG "
+            "para cálculos financeiros (independente da busca documental limitada por relevância)."
+        ),
     )
     producer_id: str | None = Field(
         default=None,

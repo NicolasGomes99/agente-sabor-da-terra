@@ -1,6 +1,7 @@
 from .financial import (
     FinancialCalculationBucket,
     FinancialSummaryCalculation,
+    ProducerMatchCandidate,
     format_brl_currency,
 )
 from .input import (
@@ -29,6 +30,7 @@ __all__ = [
     "ConsultationSourceItem",
     "FinancialCalculationBucket",
     "FinancialSummaryCalculation",
+    "ProducerMatchCandidate",
     "SourceKind",
     "_normalize_iso_date_str",
     "build_insufficient_sources_message",

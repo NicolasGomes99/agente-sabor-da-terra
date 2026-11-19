@@ -49,6 +49,17 @@ class FinancialCalculationBucket(BaseModel):
     )
 
 
+class ProducerMatchCandidate(BaseModel):
+    producer_id: str = Field(
+        min_length=1,
+        description="Código identificador do produtor na base financeira (ex.: P001).",
+    )
+    producer_name: str | None = Field(
+        default=None,
+        description="Nome completo do produtor registrado na base financeira.",
+    )
+
+
 class FinancialSummaryCalculation(BaseModel):
     producer_id: str = Field(
         min_length=1,
@@ -102,4 +113,20 @@ class FinancialSummaryCalculation(BaseModel):
     has_any_records: bool = Field(
         default=False,
         description="True quando ao menos um registro financeiro foi utilizado em algum cálculo.",
+    )
+    is_ambiguous_producer: bool = Field(
+        default=False,
+        description="True quando o critério informado corresponde a mais de um produtor em financeiro.csv.",
+    )
+    matching_producers: list[ProducerMatchCandidate] = Field(
+        default_factory=list,
+        description="Lista de produtores correspondentes quando há ambiguidade na busca.",
+    )
+    clarification_message: str | None = Field(
+        default=None,
+        description="Mensagem de esclarecimento solicitando especificação do produtor em caso de ambiguidade.",
+    )
+    is_exhaustive_source: bool = Field(
+        default=True,
+        description="True quando o cálculo utilizou a coleção exaustiva de registros de financeiro.csv.",
     )

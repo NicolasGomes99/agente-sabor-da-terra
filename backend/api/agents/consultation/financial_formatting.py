@@ -1,8 +1,11 @@
+from collections.abc import Sequence
 from datetime import date
+from typing import Any
 
+from .financial import FINANCIAL_SOURCE_FILENAME, to_consultation_source_item
 from .reconciliation import reconcile_consultation_sources
 from .schemas.financial import FinancialCalculationBucket, FinancialSummaryCalculation
-from .schemas.input import ConsultationInput
+from .schemas.input import ConsultationInput, ConsultationSourceItem
 from .schemas.response import ConsultationGapOrDivergence, ConsultationResponse
 
 
@@ -14,8 +17,9 @@ def _format_br_date(iso_date: str) -> str:
 def _format_tx_refs(bucket: FinancialCalculationBucket) -> str:
     if not bucket.transaction_ids:
         return "sem registros encontrados"
-    joined = ", ".join(bucket.transaction_ids)
-    return f"{joined} ({bucket.source_document})"
+    return ", ".join(
+        f"{bucket.source_document} - {tx_id}" for tx_id in bucket.transaction_ids
+    )
 
 
 def format_financial_calculation_prompt_block(
@@ -28,10 +32,20 @@ def format_financial_calculation_prompt_block(
     ]
     if calculation.producer_name:
         lines.append(f"produtor_nome: {calculation.producer_name}")
+    if calculation.is_ambiguous_producer:
+        lines.append("produtor_ambiguo: true")
+        if calculation.clarification_message:
+            lines.append(f"esclarecimento: {calculation.clarification_message}")
+        lines.append("</calculo_financeiro_ferramenta>")
+        return "\n".join(lines)
+
     lines.extend(
         [
             f"periodo: {calculation.period_start} a {calculation.period_end}",
-            f"data_referencia: {calculation.reference_date} ({_format_br_date(calculation.reference_date)})",
+            (
+                f"data_referencia: {calculation.reference_date} "
+                f"({_format_br_date(calculation.reference_date)})"
+            ),
             f"documento_origem: {calculation.source_document}",
             (
                 f"vendas_no_periodo: {calculation.sales_in_period.formatted_total} "
@@ -65,7 +79,21 @@ def format_financial_calculation_prompt_block(
 def compose_deterministic_financial_summary_text(
     calculation: FinancialSummaryCalculation,
 ) -> str:
-    """Gera o texto de resumo financeiro preservando todos os valores e citações da ferramenta."""
+    """Gera o texto de resumo financeiro preservando cada cálculo, valor e transação."""
+    if calculation.is_ambiguous_producer:
+        if calculation.clarification_message:
+            return calculation.clarification_message
+        candidates_desc = ", ".join(
+            f"{c.producer_id} ({c.producer_name})" if c.producer_name else c.producer_id
+            for c in calculation.matching_producers
+        )
+        return (
+            f"Foram encontrados múltiplos produtores correspondentes a "
+            f"'{calculation.producer_id}' em {calculation.source_document}: "
+            f"{candidates_desc}. Informe o código do produtor ou o nome completo "
+            "para gerar o resumo financeiro."
+        )
+
     producer_label = (
         f"{calculation.producer_name} ({calculation.producer_id})"
         if calculation.producer_name
@@ -147,18 +175,95 @@ def compose_deterministic_financial_summary_text(
     return "\n".join(parts)
 
 
+def build_missing_exhaustive_financial_source_response(
+    reference_date_iso: str,
+) -> ConsultationResponse:
+    """Resposta determinística quando não há garantia de recuperação exaustiva de financeiro.csv."""
+    ref_br = _format_br_date(reference_date_iso)
+    message = (
+        f"Considerando a data de referência {ref_br} ({reference_date_iso}), "
+        f"não é possível calcular o resumo financeiro completo porque a coleção "
+        f"exaustiva de registros de {FINANCIAL_SOURCE_FILENAME} não foi disponibilizada "
+        f"para a ferramenta financeira (apenas resultados parciais de busca documental "
+        f"não garantem a inclusão de todas as transações elegíveis)."
+    )
+    return ConsultationResponse(
+        answer=message,
+        reference_date_used=reference_date_iso,
+        source_ids=[],
+        cited_sources=[],
+        gaps_and_divergences=[
+            ConsultationGapOrDivergence(
+                kind="lacuna",
+                description=(
+                    f"Recuperação exaustiva de {FINANCIAL_SOURCE_FILENAME} ausente; "
+                    "cálculo financeiro bloqueado para evitar totais parciais."
+                ),
+                source_ids=[],
+            )
+        ],
+        has_sufficient_data=False,
+    )
+
+
+def _merge_reconciliation_payload(
+    payload: ConsultationInput,
+    exhaustive_financial_records: Sequence[ConsultationSourceItem | Any] | None,
+) -> ConsultationInput:
+    merged_sources: list[ConsultationSourceItem] = []
+    seen_ids: set[str] = set()
+
+    for raw_record in exhaustive_financial_records or []:
+        normalized = to_consultation_source_item(raw_record)
+        if normalized is not None and normalized.source_id not in seen_ids:
+            seen_ids.add(normalized.source_id)
+            merged_sources.append(normalized)
+
+    for src in payload.sources:
+        if src.source_id not in seen_ids:
+            seen_ids.add(src.source_id)
+            merged_sources.append(src)
+
+    return payload.model_copy(update={"sources": merged_sources})
+
+
 def reconcile_financial_consultation_response(
     response: ConsultationResponse,
     calculation: FinancialSummaryCalculation,
     payload: ConsultationInput,
+    *,
+    exhaustive_financial_records: Sequence[ConsultationSourceItem | Any] | None = None,
 ) -> ConsultationResponse:
-    """Garante preservação dos valores calculados (RNF04) e citação dos registros financeiros (RNF06)."""
-    if not payload.sources:
-        return reconcile_consultation_sources(response, payload)
+    """Preserva exatamente cada cálculo, valor e transação financeira (RF08, RNF04, RNF06)."""
+    effective_payload = _merge_reconciliation_payload(
+        payload,
+        exhaustive_financial_records=(
+            exhaustive_financial_records
+            if exhaustive_financial_records is not None
+            else payload.financial_records
+        ),
+    )
+
+    if calculation.is_ambiguous_producer:
+        clarification_text = compose_deterministic_financial_summary_text(calculation)
+        return ConsultationResponse(
+            answer=clarification_text,
+            reference_date_used=calculation.reference_date,
+            source_ids=[],
+            cited_sources=[],
+            gaps_and_divergences=[
+                ConsultationGapOrDivergence(
+                    kind="lacuna",
+                    description=clarification_text,
+                    source_ids=[],
+                )
+            ],
+            has_sufficient_data=False,
+        )
 
     if not calculation.has_any_records:
         deterministic_text = compose_deterministic_financial_summary_text(calculation)
-        empty_calc_response = ConsultationResponse(
+        return ConsultationResponse(
             answer=deterministic_text,
             reference_date_used=calculation.reference_date,
             source_ids=[],
@@ -176,47 +281,29 @@ def reconcile_financial_consultation_response(
             ],
             has_sufficient_data=False,
         )
-        return reconcile_consultation_sources(empty_calc_response, payload)
 
-    merged_source_ids = list(calculation.all_source_ids)
-    for sid in response.source_ids:
-        if sid in calculation.all_source_ids and sid not in merged_source_ids:
-            merged_source_ids.append(sid)
-
-    required_tokens: list[str] = [calculation.source_document, *calculation.all_transaction_ids]
-    for bucket in (
-        calculation.sales_in_period,
-        calculation.registered_payments_in_period,
-        calculation.pending_overdue,
-        calculation.pending_upcoming,
-    ):
-        if bucket.has_records:
-            required_tokens.append(bucket.formatted_total)
-
-    answer_text = response.answer
-    missing_token = any(token not in answer_text for token in required_tokens)
-    has_missing_bucket = any(
-        not b.has_records
-        for b in (
-            calculation.sales_in_period,
-            calculation.registered_payments_in_period,
-            calculation.pending_total,
+    # Usa o formatador determinístico para preservar estritamente a associação entre
+    # cada categoria financeira, seu valor calculado e as transações que o sustentam.
+    deterministic_answer = compose_deterministic_financial_summary_text(calculation)
+    allowed_source_ids = set(calculation.all_source_ids)
+    filtered_cited_sources = [
+        cited for cited in response.cited_sources if cited.source_id in allowed_source_ids
+    ]
+    filtered_gaps = [
+        ConsultationGapOrDivergence(
+            kind=gap.kind,
+            description=gap.description,
+            source_ids=[sid for sid in gap.source_ids if sid in allowed_source_ids],
         )
-    )
-    mentions_absence = any(
-        marker in answer_text.lower()
-        for marker in ("não foram encontrados", "nao foram encontrados", "sem registros", "ausência", "nenhum pagamento")
-    )
-
-    if missing_token or (has_missing_bucket and not mentions_absence):
-        answer_text = compose_deterministic_financial_summary_text(calculation)
+        for gap in response.gaps_and_divergences
+    ]
 
     enriched = ConsultationResponse(
-        answer=answer_text,
+        answer=deterministic_answer,
         reference_date_used=calculation.reference_date,
-        source_ids=merged_source_ids,
-        cited_sources=response.cited_sources,
-        gaps_and_divergences=response.gaps_and_divergences,
+        source_ids=list(calculation.all_source_ids),
+        cited_sources=filtered_cited_sources,
+        gaps_and_divergences=filtered_gaps,
         has_sufficient_data=True,
     )
-    return reconcile_consultation_sources(enriched, payload)
+    return reconcile_consultation_sources(enriched, effective_payload)

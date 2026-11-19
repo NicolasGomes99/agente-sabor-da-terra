@@ -94,7 +94,26 @@ class OrchestratorRequest(BaseModel):
     source_id: str | None = Field(default=None)
     sources: list[ConsultationSourceItem] = Field(
         default_factory=list,
-        description="Trechos e registros recuperados para consulta documental.",
+        description="Trechos e registros recuperados por busca para consulta documental.",
+    )
+    financial_records: list[ConsultationSourceItem] | None = Field(
+        default=None,
+        description=(
+            "Coleção exaustiva de registros de financeiro.csv indexados no RAG para "
+            "cálculos financeiros completos (independente da busca limitada por relevância)."
+        ),
+    )
+    producer_id: str | None = Field(
+        default=None,
+        description="Identificador ou nome do produtor quando a solicitação envolve resumo financeiro.",
+    )
+    period_start: datetime | date | str | None = Field(
+        default=None,
+        description="Data inicial do período solicitado para resumo financeiro.",
+    )
+    period_end: datetime | date | str | None = Field(
+        default=None,
+        description="Data final do período solicitado para resumo financeiro.",
     )
     history: list[ConversationTurn] = Field(
         default_factory=list,
