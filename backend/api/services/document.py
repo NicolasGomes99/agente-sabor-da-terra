@@ -47,16 +47,21 @@ class DocumentCitedError(Exception):
     ) -> None:
         self.document = document
         self.citations = citations
-        first_citation, first_chunk, first_message, first_session = citations[0]
-        excerpt = (
-            f"{first_chunk.content[:80]}..."
-            if len(first_chunk.content) > 80
-            else first_chunk.content
-        )
+        first_citation, first_chunk, _first_message, first_session = citations[0]
+        if first_chunk.record_id:
+            source = f"registro {first_chunk.record_id}"
+        else:
+            excerpt = (
+                f"{first_chunk.content[:80]}..."
+                if len(first_chunk.content) > 80
+                else first_chunk.content
+            )
+            source = f'trecho "{excerpt}"'
+        extra = f" (e mais {len(citations) - 1})" if len(citations) > 1 else ""
         super().__init__(
             f"Não é possível excluir o documento '{document.original_filename}' porque ele é citado "
-            f"na conversa '{first_session.title}' (citação message_id={first_citation.message_id}, "
-            f"chunk_id={first_citation.chunk_id}, trecho: \"{excerpt}\")."
+            f"na conversa '{first_session.title}' ({source}; "
+            f"message_id={first_citation.message_id}){extra}."
         )
 
 

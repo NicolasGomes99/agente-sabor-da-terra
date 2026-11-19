@@ -26,6 +26,20 @@ class CitationOut(BaseModel):
     document_id: UUID
     document_name: str
     chunk_content: str
+    record_id: str | None = None
+    record_fields: dict[str, str] | None = None
+
+    @computed_field
+    @property
+    def source_type(self) -> str:
+        return "record" if self.record_id else "excerpt"
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        if self.record_id:
+            return f"{self.document_name} - {self.record_id}"
+        return self.document_name
 
     @computed_field
     @property
@@ -50,6 +64,8 @@ class CitationOut(BaseModel):
             "document_id": document.id,
             "document_name": document.original_filename,
             "chunk_content": chunk.content,
+            "record_id": chunk.record_id,
+            "record_fields": chunk.record_fields,
         }
 
 
@@ -61,6 +77,7 @@ class MessageOut(BaseModel):
     role: str
     content: str
     created_at: datetime
+    citations: list[CitationOut] = Field(default_factory=list)
 
     @field_validator("role", mode="before")
     @classmethod
