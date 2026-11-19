@@ -8,6 +8,7 @@ from ..repositories.chat import ChatRepository
 class SessionNotFoundError(LookupError):
     pass
 
+
 class ChatService:
     def __init__(self, repository: ChatRepository) -> None:
         self.repository = repository
@@ -28,7 +29,7 @@ class ChatService:
             raise SessionNotFoundError
         messages = await self.repository.list_messages(chat.id)
         return chat, messages
-    
+
     async def add_message(
             self, session_id: UUID, user_id: UUID, content: str
     ) -> ChatMessage:

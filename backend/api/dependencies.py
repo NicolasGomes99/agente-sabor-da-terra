@@ -1,4 +1,3 @@
-
 from threading import Lock
 from typing import Annotated
 
@@ -39,9 +38,11 @@ _gcs_client: Client | None = None
 
 def _get_gcs_client() -> Client:
     global _gcs_client
+
     with _gcs_client_lock:
         if _gcs_client is None:
             _gcs_client = Client()
+
         return _gcs_client
 
 
@@ -94,7 +95,7 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
     session_maker = database.get_session_maker()
-    
+
     try:
         async with session_maker() as session:
             user = await _build_auth_service(session).get_current_user(token)
@@ -114,9 +115,9 @@ async def get_current_user(
 
     return user
 
+
 def get_order_service(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrderService:
     repository = OrderRepository(session)
     return OrderService(repository)
-

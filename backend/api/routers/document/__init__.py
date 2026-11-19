@@ -10,7 +10,11 @@ from ...schemas.document import DocumentResponse
 from ...services.document import DocumentNotFoundError, DocumentService
 from .stream import INLINE_MEDIA_TYPES, DocumentStreamResponse, file_responses
 from .upload import document_upload
-
+from ...services.document import (
+    DocumentCitedError,
+    DocumentNotFoundError,
+    DocumentService,
+)
 ERROR_DETAIL_CONTENT = {
     "application/json": {
         "schema": {
@@ -112,11 +116,19 @@ async def download_document(
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    responses={404: {"description": "Document not found.", "content": ERROR_DETAIL_CONTENT}},
+    responses={
+        404: {"description": "Document not found.", "content": ERROR_DETAIL_CONTENT},
+        409: {
+            "description": "Document is cited in a chat response and cannot be deleted.",
+            "content": ERROR_DETAIL_CONTENT,
+        },
+    },
 )
 async def delete_document(document_id: UUID, service: DocumentServiceDependency) -> Response:
     try:
         await service.delete_document(document_id)
     except DocumentNotFoundError as error:
         raise HTTPException(status_code=404, detail="Document not found.") from error
+    except DocumentCitedError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
