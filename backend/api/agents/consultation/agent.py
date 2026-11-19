@@ -7,10 +7,13 @@ from google.genai import types
 
 from ..callbacks import guard_untrusted_input_callback
 from ..config import get_agent_model
+from .reconciliation import (
+    build_insufficient_sources_message,
+    reconcile_consultation_sources,
+)
 from .schemas import (
     ConsultationInput,
     ConsultationResponse,
-    reconcile_consultation_sources,
 )
 
 CONSULTATION_APP_NAME = "sabor_da_terra_consultation"
@@ -117,6 +120,15 @@ async def answer_document_consultation(
     runner: Runner | None = None,
     model: str | None = None,
 ) -> ConsultationResponse:
+    if not payload.sources:
+        resolved_date_iso = payload.resolved_reference_date.isoformat()
+        placeholder = ConsultationResponse(
+            answer=build_insufficient_sources_message(resolved_date_iso),
+            reference_date_used=resolved_date_iso,
+            has_sufficient_data=False,
+        )
+        return reconcile_consultation_sources(placeholder, payload)
+
     active_runner = runner
     if active_runner is None:
         agent = (
