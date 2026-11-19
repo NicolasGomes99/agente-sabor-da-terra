@@ -40,6 +40,7 @@ const session: SolicitationSession = {
       content: 'Tenho 200 kg de queijo coalho. Me avisa até amanhã.',
       position: 1,
       created_at: timestamp,
+      citations: [],
     },
     {
       id: 'message-analysis',
@@ -47,6 +48,7 @@ const session: SolicitationSession = {
       content: 'Análise inicial da triagem\nPrazo: 31/10/2026\nPendências:\n- Verificar pedidos da semana.',
       position: 2,
       created_at: timestamp,
+      citations: [],
     },
   ],
 }
@@ -61,6 +63,7 @@ const clarification = {
   content: 'Há pedidos para o produtor nesta semana.',
   position: 3,
   created_at: timestamp,
+  citations: [],
 }
 
 function deferred<T>() {
