@@ -21,6 +21,7 @@ import {
   type OrderRecord,
 } from '../../src/features/orders/ordersApi'
 import { listProducers } from '../../src/features/registry/registryApi'
+import { ApiError } from '../../src/lib/api-client'
 import { setAccessToken } from '../../src/lib/auth-storage'
 
 vi.mock('../../src/features/orders/ordersApi', () => ({
@@ -208,6 +209,38 @@ describe('Alocações por item', () => {
         },
       )
     })
+  })
+
+  it('mostra o motivo retornado pelo backend ao rejeitar uma alocação', async () => {
+    create.mockRejectedValue(
+      new ApiError(422, {
+        detail: 'O produtor João Silva está inativo e não pode atender a este item.',
+      }),
+    )
+
+    openPage('/orders/order-id')
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '+ Nova alocação' }),
+    )
+
+    const dialog = await screen.findByRole('dialog')
+
+    fireEvent.change(within(dialog).getByLabelText(/Produtor/), {
+      target: { value: producerAna.id },
+    })
+    fireEvent.change(within(dialog).getByLabelText(/Quantidade/), {
+      target: { value: '40' },
+    })
+    fireEvent.click(within(dialog).getByLabelText(/Confirmo a disponibilidade/))
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Adicionar alocação' }),
+    )
+
+    expect(
+      await within(dialog).findByText(/inativo e não pode atender/),
+    ).toBeTruthy()
   })
 
   it('exige confirmação antes de cadastrar', async () => {

@@ -115,6 +115,21 @@ async def test_create_lot_persists_and_updates_balance(
     assert item["balance"] == "60.000"
 
 
+async def test_balance_preserves_conversion_precision(
+    service: LotService,
+    db_session: AsyncSession,
+    environment: SimpleNamespace,
+) -> None:
+    await service.create(
+        environment.order.id,
+        environment.item.id,
+        create_payload(environment.active.id, quantity="999.4", unit="g"),
+    )
+
+    snapshot = await order_snapshot(db_session, environment.order.id)
+    assert Decimal(snapshot["items"][0]["balance"]) == Decimal("99.0006")
+
+
 async def test_create_rejects_inactive_producer(
     service: LotService,
     environment: SimpleNamespace,

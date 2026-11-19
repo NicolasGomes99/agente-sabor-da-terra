@@ -76,4 +76,4 @@ class OrderItem(Base):
         )
         if allocated is None:
             return None
-        return (self.quantity - allocated).quantize(Decimal("0.001"))
+        return self.quantity - allocated

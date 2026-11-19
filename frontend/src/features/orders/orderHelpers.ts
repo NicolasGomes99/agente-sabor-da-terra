@@ -28,6 +28,14 @@ export function isOrderVersionConflict(error: unknown): boolean {
     'code' in detail && detail.code === 'order_version_conflict'
 }
 
+export function apiErrorDetail(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null
+  const details = error.details
+  if (typeof details !== 'object' || details === null || !('detail' in details)) return null
+  const detail = details.detail
+  return typeof detail === 'string' && detail.trim() ? detail : null
+}
+
 export function orderError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 404) {
@@ -36,6 +44,11 @@ export function orderError(error: unknown): string {
 
     if (isOrderVersionConflict(error)) {
       return 'Este pedido foi alterado por outra operação. Suas alterações ainda não foram salvas. Recarregue o pedido e revise os dados antes de tentar novamente.'
+    }
+
+    const detail = apiErrorDetail(error)
+    if (detail) {
+      return detail
     }
 
     if (error.status === 409) {

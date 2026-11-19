@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
+import { apiErrorDetail } from '../orderHelpers'
 import {
   createLot,
   deleteLot,
@@ -20,11 +21,8 @@ interface LotSectionProps {
 }
 
 function saveErrorMessage(cause: unknown): string {
-  if (cause instanceof ApiError && cause.status === 422) {
-    return 'Não foi possível salvar a alocação. Confira o produtor, a '
-      + 'quantidade, a unidade e a data dentro do prazo do pedido.'
-  }
-  return 'Não foi possível salvar a alocação. Tente novamente.'
+  return apiErrorDetail(cause)
+    ?? 'Não foi possível salvar a alocação. Tente novamente.'
 }
 
 export function LotSection({ order, onChanged }: LotSectionProps) {
@@ -86,7 +84,10 @@ export function LotSection({ order, onChanged }: LotSectionProps) {
         logout()
         return
       }
-      setError('Não foi possível excluir a alocação. Tente novamente.')
+      setError(
+        apiErrorDetail(cause)
+          ?? 'Não foi possível excluir a alocação. Tente novamente.',
+      )
     } finally {
       setDeletingId(null)
     }

@@ -85,17 +85,20 @@ class LotService:
 
     async def update(self, lot_id: UUID, data: LotUpdate) -> Lot:
         try:
-            lot = await self.repository.get_by_id(lot_id)
-            if lot is None:
+            existing = await self.repository.get_by_id(lot_id)
+            if existing is None:
                 raise LotNotFoundError("Lote não encontrado.")
-            if lot.item_id is None:
+            if existing.item_id is None:
                 raise LotValidationError(
                     "Lotes importados não podem ser editados."
                 )
 
-            order = await self._get_order_by_item(lot.item_id, lock=True)
+            order = await self._get_order_by_item(existing.item_id, lock=True)
             self._ensure_active(order)
-            item = self._find_item(order, lot.item_id)
+            item = self._find_item(order, existing.item_id)
+            lot = self._find_lot(item, lot_id)
+            if lot is None:
+                raise LotNotFoundError("Lote não encontrado.")
 
             producer = await self._get_active_producer(data.producer_id, item)
             self._validate_delivery_date(order, data.delivery_date)
@@ -136,16 +139,20 @@ class LotService:
 
     async def delete(self, lot_id: UUID) -> None:
         try:
-            lot = await self.repository.get_by_id(lot_id)
-            if lot is None:
+            existing = await self.repository.get_by_id(lot_id)
+            if existing is None:
                 raise LotNotFoundError("Lote não encontrado.")
-            if lot.item_id is None:
+            if existing.item_id is None:
                 raise LotValidationError(
                     "Lotes importados não podem ser excluídos."
                 )
 
-            order = await self._get_order_by_item(lot.item_id, lock=True)
+            order = await self._get_order_by_item(existing.item_id, lock=True)
             self._ensure_active(order)
+            item = self._find_item(order, existing.item_id)
+            lot = self._find_lot(item, lot_id)
+            if lot is None:
+                raise LotNotFoundError("Lote não encontrado.")
 
             await self.repository.delete(lot)
             await self._commit()
@@ -171,6 +178,12 @@ class LotService:
             if item.id == item_id:
                 return item
         raise LotNotFoundError("Item não encontrado neste pedido.")
+
+    def _find_lot(self, item: OrderItem, lot_id: UUID) -> Lot | None:
+        for lot in item.lots:
+            if lot.id == lot_id:
+                return lot
+        return None
 
     def _ensure_active(self, order: Order) -> None:
         if order.cancelled:
