@@ -10,7 +10,7 @@ function LocationProbe() {
 }
 
 describe('Sidebar', () => {
-  it('navigates to documents and highlights the current link', () => {
+  it('navigates between triage, documents and highlights the current link', () => {
     render(
       <AuthContext.Provider value={{
         accessToken: 'access-token', isAuthenticated: true, login: vi.fn(), logout: vi.fn(),
@@ -23,15 +23,24 @@ describe('Sidebar', () => {
     )
 
     const chat = screen.getByRole('link', { name: 'Chat' })
+    const triage = screen.getByRole('link', { name: 'Triagem' })
     const documents = screen.getByRole('link', { name: 'Documentos' })
     expect(chat.getAttribute('aria-current')).toBe('page')
+    fireEvent.click(triage)
+
+    expect(screen.getByTestId('location').textContent).toBe('/triagem')
+    expect(triage.getAttribute('aria-current')).toBe('page')
+    expect(triage.classList.contains('active')).toBe(true)
+    expect(chat.classList.contains('active')).toBe(false)
+    expect(chat.hasAttribute('aria-current')).toBe(false)
+
     fireEvent.click(documents)
 
     expect(screen.getByTestId('location').textContent).toBe('/documents')
     expect(documents.getAttribute('aria-current')).toBe('page')
     expect(documents.classList.contains('active')).toBe(true)
-    expect(chat.classList.contains('active')).toBe(false)
-    expect(chat.hasAttribute('aria-current')).toBe(false)
+    expect(triage.classList.contains('active')).toBe(false)
+    expect(triage.hasAttribute('aria-current')).toBe(false)
   })
 
   it('logs out and navigates to login', () => {

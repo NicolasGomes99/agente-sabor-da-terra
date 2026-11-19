@@ -3,7 +3,6 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../features/auth/useAuth'
 
 const navigationItems = [
-  { label: 'Triagem', available: false },
   { label: 'Pedidos', available: false },
   { label: 'Agendamentos', available: false },
 ]
@@ -32,6 +31,10 @@ export function Sidebar() {
       </button>
 
       <nav className="sidebar-navigation" aria-label="Navegação principal">
+        <NavLink className="sidebar-nav-item" to="/triagem">
+          <span aria-hidden="true">▥</span>
+          Triagem
+        </NavLink>
         <NavLink className="sidebar-nav-item" to="/chat">
           <span aria-hidden="true">◌</span>
           Chat
