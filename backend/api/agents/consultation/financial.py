@@ -21,19 +21,20 @@ FINANCIAL_TOOL_NAME = "calcular_resumo_financeiro_produtor"
 
 _PRODUCER_CODE_RE = re.compile(r"\b(P\d{2,4})\b", re.IGNORECASE)
 _HISTORY_BLOCK_RE = re.compile(
-    r"<historico_sessao_atual>.*?</historico_sessao_atual>",
+    r"<historico_sessao_atual>(.*?)</historico_sessao_atual>",
     re.DOTALL,
 )
+_TURN_BLOCK_RE = re.compile(r"<turno[^>]*>(.*?)</turno>", re.DOTALL)
 _ISO_RANGE_RE = re.compile(
-    r"(\d{4}-\d{2}-\d{2})\s*(?:a|at[ée]|e|-)\s*(\d{4}-\d{2}-\d{2})",
+    r"(\d{4}-\d{1,2}-\d{1,2})\s*(?:a|at[ée]|e|-)\s*(\d{4}-\d{1,2}-\d{1,2})",
     re.IGNORECASE,
 )
 _BR_RANGE_RE = re.compile(
-    r"(\d{2}/\d{2}/\d{4})\s*(?:a|at[ée]|e|-)\s*(\d{2}/\d{2}/\d{4})",
+    r"(\d{1,2}/\d{1,2}/\d{4})\s*(?:a|at[ée]|e|-)\s*(\d{1,2}/\d{1,2}/\d{4})",
     re.IGNORECASE,
 )
-_ISO_MONTH_RE = re.compile(r"(?<!\d-)(\d{4})-(\d{2})(?!-\d{2})\b")
-_BR_MONTH_RE = re.compile(r"(?<!\d/)(\d{2})/(\d{4})(?!\d)")
+_ISO_MONTH_RE = re.compile(r"(?<!\d-)(\d{4})-(\d{2})(?!-\d{1,2})\b")
+_BR_MONTH_RE = re.compile(r"(?<!\d/)\b(\d{1,2})/(\d{4})\b(?!\d)")
 
 _MONTH_NAMES: dict[str, int] = {
     "janeiro": 1,
@@ -55,7 +56,7 @@ _MONTH_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _WRITTEN_BR_DATE_RE = re.compile(
-    r"^(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
+    r"^(\d{1,2})[º°]?\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
     r"setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})$",
     re.IGNORECASE,
 )
@@ -65,10 +66,22 @@ _REFERENCE_DATE_CLAUSE_RE = re.compile(
     r"|ref\.?"
     r"|data[- ]base"
     r"|posi[çc][ãa]o"
-    r")\s*(?:(?:em|de|a|ao|no|na|:|=)\s*)*(?:dia\s+)?"
-    r"(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}|"
-    r"\d{1,2}\s+de\s+(?:janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
-    r"setembro|outubro|novembro|dezembro)\s+de\s+\d{4})",
+    r")\s*(?:(?:em|de|a|ao|no|na|para|igual\s+a|:|=)\s*)*(?:dia\s+)?"
+    r"(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{1,2}-\d{1,2}|"
+    r"\d{1,2}[º°]?\s+de\s+(?:janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|"
+    r"setembro|outubro|novembro|dezembro)\s+de\s+\d{4})(?!\d|/|-)",
+    re.IGNORECASE,
+)
+_EXPLICIT_REFERENCE_MENTION_RE = re.compile(
+    r"(?<!\bsem\s)(?<!\bsem\sdata\sde\s)\b(?:"
+    r"(?:data\s+de\s+)?refer[êe]ncia"
+    r"|ref\.(?=\s*[:=]?\s*\S)"
+    r"|ref\s*(?:[:=]|(?:em|de|no|na)\b|\d)"
+    r"|data[- ]base"
+    r"|posi[çc][ãa]o\s+(?:em|de|no|na)\s+(?:dia\s+)?(?:\d|hoje|ontem|amanh[ãa]|"
+    r"janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|"
+    r"novembro|dezembro)\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -438,11 +451,8 @@ def resolve_period_bounds(
     raise ValueError("Either (period_start, period_end) or period must be provided.")
 
 
-def _extract_producer_from_text(text: str) -> str | None:
-    code_match = _PRODUCER_CODE_RE.search(text)
-    if code_match:
-        return code_match.group(1).upper()
-
+def _extract_producer_name_mentions(text: str) -> list[str]:
+    mentions: list[str] = []
     for pattern in _PRODUCER_NAME_PATTERNS:
         for match in pattern.finditer(text):
             candidate = match.group(1).strip(" .,-")
@@ -462,7 +472,24 @@ def _extract_producer_from_text(text: str) -> str | None:
             ):
                 cleaned_words = cleaned_words[1:]
             if cleaned_words:
-                return " ".join(cleaned_words)
+                mention = " ".join(cleaned_words)
+                if mention not in mentions:
+                    mentions.append(mention)
+    return mentions
+
+
+def _extract_producer_from_text(text: str) -> str | None:
+    distinct_codes = list(
+        dict.fromkeys(m.upper() for m in _PRODUCER_CODE_RE.findall(text))
+    )
+    if len(distinct_codes) == 1:
+        return distinct_codes[0]
+    if len(distinct_codes) > 1:
+        return None
+
+    mentions = _extract_producer_name_mentions(text)
+    if len(mentions) == 1:
+        return mentions[0]
     return None
 
 
@@ -494,7 +521,12 @@ class ExtractedFinancialQueryParams:
     period_start: date | None = None
     period_end: date | None = None
     reference_date: date | None = None
-    has_invalid_date: bool = False
+    has_invalid_reference_date: bool = False
+    has_invalid_period_date: bool = False
+
+    @property
+    def has_invalid_date(self) -> bool:
+        return self.has_invalid_reference_date or self.has_invalid_period_date
 
 
 def _parse_br_date(raw: str) -> date | None:
@@ -507,7 +539,10 @@ def _parse_br_date(raw: str) -> date | None:
 
 def _parse_iso_date(raw: str) -> date | None:
     try:
-        return date.fromisoformat(raw)
+        parts = raw.split("-")
+        if len(parts) != 3:
+            return None
+        return date(int(parts[0]), int(parts[1]), int(parts[2]))
     except ValueError:
         return None
 
@@ -539,19 +574,22 @@ def extract_financial_query_params(
     current = _HISTORY_BLOCK_RE.sub("", question).strip()
 
     extracted_ref_date: date | None = None
-    has_invalid_date = False
+    has_invalid_reference_date = False
+    has_invalid_period_date = False
     text_without_ref = current
 
     ref_match = _REFERENCE_DATE_CLAUSE_RE.search(current)
     if ref_match:
         parsed_ref = _parse_natural_date(ref_match.group(1))
         if parsed_ref is None:
-            has_invalid_date = True
+            has_invalid_reference_date = True
         else:
             extracted_ref_date = parsed_ref
         text_without_ref = (
             current[: ref_match.start()] + " " + current[ref_match.end() :]
         ).strip()
+    elif _EXPLICIT_REFERENCE_MENTION_RE.search(current):
+        has_invalid_reference_date = True
 
     producer = _extract_producer_from_text(text_without_ref)
     anchor_date = extracted_ref_date or reference_date
@@ -564,7 +602,7 @@ def extract_financial_query_params(
         candidate_start = _parse_iso_date(iso_range.group(1))
         candidate_end = _parse_iso_date(iso_range.group(2))
         if candidate_start is None or candidate_end is None or candidate_end < candidate_start:
-            has_invalid_date = True
+            has_invalid_period_date = True
         else:
             period_start, period_end = candidate_start, candidate_end
     else:
@@ -577,7 +615,7 @@ def extract_financial_query_params(
                 or candidate_end is None
                 or candidate_end < candidate_start
             ):
-                has_invalid_date = True
+                has_invalid_period_date = True
             else:
                 period_start, period_end = candidate_start, candidate_end
         else:
@@ -602,7 +640,7 @@ def extract_financial_query_params(
                         period_start = date(year, month, 1)
                         period_end = date(year, month, last_day)
                     else:
-                        has_invalid_date = True
+                        has_invalid_period_date = True
                 else:
                     br_month = _BR_MONTH_RE.search(text_without_ref)
                     if br_month:
@@ -612,15 +650,115 @@ def extract_financial_query_params(
                             period_start = date(year, month, 1)
                             period_end = date(year, month, last_day)
                         else:
-                            has_invalid_date = True
+                            has_invalid_period_date = True
 
     return ExtractedFinancialQueryParams(
         producer=producer,
         period_start=period_start,
         period_end=period_end,
         reference_date=extracted_ref_date,
-        has_invalid_date=has_invalid_date,
+        has_invalid_reference_date=has_invalid_reference_date,
+        has_invalid_period_date=has_invalid_period_date,
     )
+
+
+def _collect_financial_producers(
+    exhaustive_records: Sequence[ConsultationSourceItem | Any],
+) -> tuple[list[_ParsedFinancialRow], dict[str, str | None]]:
+    venda_rows: list[_ParsedFinancialRow] = []
+    producers_by_id: dict[str, str | None] = {}
+    for src in exhaustive_records:
+        parsed = _extract_financial_row(src)
+        if parsed is None or parsed.transaction_type != "venda":
+            continue
+        venda_rows.append(parsed)
+        if parsed.producer_id not in producers_by_id or (
+            producers_by_id[parsed.producer_id] is None and parsed.producer_name
+        ):
+            producers_by_id[parsed.producer_id] = parsed.producer_name
+    return venda_rows, producers_by_id
+
+
+def _resolve_producers_in_segment(
+    text: str,
+    venda_rows: list[_ParsedFinancialRow],
+    producers_by_id: dict[str, str | None],
+) -> tuple[str | None, list[ProducerMatchCandidate]]:
+    matched_ids: set[str] = {m.upper() for m in _PRODUCER_CODE_RE.findall(text)}
+    norm_text = _normalize_text(text)
+    for pid, pname in producers_by_id.items():
+        if not pname:
+            continue
+        norm_name = _normalize_text(pname)
+        if norm_name and re.search(rf"\b{re.escape(norm_name)}\b", norm_text):
+            matched_ids.add(pid)
+
+    for mention in _extract_producer_name_mentions(text):
+        rows, ambiguous = _match_single_producer_rows(mention, venda_rows)
+        for cand in ambiguous:
+            matched_ids.add(cand.producer_id)
+        if rows:
+            matched_ids.add(rows[0].producer_id)
+
+    ordered = sorted(matched_ids)
+    if len(ordered) == 1:
+        return ordered[0], []
+    if len(ordered) > 1:
+        candidates = [
+            ProducerMatchCandidate(
+                producer_id=pid,
+                producer_name=producers_by_id.get(pid),
+            )
+            for pid in ordered
+        ]
+        return None, candidates
+    return None, []
+
+
+def extract_producer_from_question(
+    question: str,
+    *,
+    exhaustive_records: Sequence[ConsultationSourceItem | Any],
+) -> tuple[str | None, list[ProducerMatchCandidate]]:
+    """Identifica um único produtor no texto atual da consulta usando os registros de financeiro.csv."""
+    current = _HISTORY_BLOCK_RE.sub("", question).strip()
+    if not current:
+        return None, []
+    venda_rows, producers_by_id = _collect_financial_producers(exhaustive_records)
+    return _resolve_producers_in_segment(current, venda_rows, producers_by_id)
+
+
+def extract_producer_from_history(
+    question: str,
+    *,
+    exhaustive_records: Sequence[ConsultationSourceItem | Any],
+) -> tuple[str | None, list[ProducerMatchCandidate]]:
+    """Identifica um único produtor a partir do histórico da conversa (`<historico_sessao_atual>`).
+
+    Retorna `(producer_id, [])` se o turno mais recente relevante identificar exatamente um produtor,
+    `(None, candidates)` se o contexto mencionar múltiplos produtores (ambiguidade), ou
+    `(None, [])` quando não houver histórico ou referência a produtor no contexto.
+    """
+    history_match = _HISTORY_BLOCK_RE.search(question)
+    if not history_match:
+        return None, []
+
+    history_body = history_match.group(1)
+    turns = _TURN_BLOCK_RE.findall(history_body) or [history_body]
+    venda_rows, producers_by_id = _collect_financial_producers(exhaustive_records)
+
+    for turn_text in reversed(turns):
+        resolved_id, ambiguous = _resolve_producers_in_segment(
+            turn_text,
+            venda_rows,
+            producers_by_id,
+        )
+        if ambiguous:
+            return None, ambiguous
+        if resolved_id is not None:
+            return resolved_id, []
+
+    return None, []
 
 
 def _build_bucket(rows: list[_ParsedFinancialRow]) -> FinancialCalculationBucket:

@@ -16,6 +16,8 @@ from .financial import (
     build_financial_summary_tool,
     calculate_producer_financial_summary,
     extract_financial_query_params,
+    extract_producer_from_history,
+    extract_producer_from_question,
     is_financial_consultation_query,
     resolve_exhaustive_financial_records,
     to_consultation_source_item,
@@ -198,6 +200,7 @@ def _select_verified_financial_calculation(
     *,
     authoritative_calculation: FinancialSummaryCalculation | None,
     captured_calculations: Sequence[FinancialSummaryCalculation],
+    expected_context_producer: str | None,
     identified_period_start: date | None,
     identified_period_end: date | None,
     effective_reference_date: date,
@@ -209,13 +212,21 @@ def _select_verified_financial_calculation(
     if authoritative_calculation is not None:
         return authoritative_calculation, None
 
+    if expected_context_producer is None:
+        return None, (
+            "Não foi possível identificar de forma inequívoca o produtor na solicitação "
+            "nem no histórico da conversa para fundamentar o cálculo financeiro."
+        )
+
     if not captured_calculations:
         return None, (
-            "A ferramenta de cálculo financeiro não foi executada e não foi possível "
-            "identificar o produtor na solicitação para calcular os valores determinísticos."
+            "A ferramenta de cálculo financeiro não foi executada para confirmar os "
+            "valores determinísticos da solicitação."
         )
 
     for candidate in reversed(captured_calculations):
+        if candidate.producer_id.upper() != expected_context_producer.upper():
+            continue
         if candidate.reference_date != expected_ref_iso:
             continue
         if (
@@ -243,8 +254,8 @@ def _select_verified_financial_calculation(
         return verified, None
 
     return None, (
-        "Os parâmetros utilizados pela ferramenta financeira divergem do período ou "
-        "da data de referência solicitados pelo funcionário."
+        "Os parâmetros utilizados pela ferramenta financeira divergem do produtor, "
+        "do período ou da data de referência identificados na solicitação."
     )
 
 
@@ -274,6 +285,7 @@ async def answer_document_consultation(
 
     effective_reference_date = payload.resolved_reference_date
     identified_producer: str | None = payload.producer_id
+    grounded_context_producer: str | None = None
     identified_period_start: date | None = (
         to_pernambuco_date(payload.period_start)
         if payload.period_start is not None
@@ -296,28 +308,84 @@ async def answer_document_consultation(
             or payload.resolved_reference_date
         )
         if (
-            extracted.has_invalid_date
+            extracted.has_invalid_reference_date
             and payload.resolved_financial_reference_date is None
+        ):
+            return build_missing_financial_parameters_response(
+                effective_reference_date.isoformat(),
+                reason=(
+                    "A data de referência explícita informada na consulta é inválida ou "
+                    "não pôde ser interpretada (informe no formato DD/MM/AAAA ou AAAA-MM-DD)."
+                ),
+            )
+        if (
+            extracted.has_invalid_period_date
             and payload.period_start is None
             and payload.period_end is None
         ):
             return build_missing_financial_parameters_response(
                 effective_reference_date.isoformat(),
                 reason=(
-                    "A data de período ou de referência informada na consulta é inválida "
-                    "ou inconsistente."
+                    "O período informado na consulta financeira é inválido ou inconsistente."
                 ),
             )
         if exhaustive_records is None:
             return build_missing_exhaustive_financial_source_response(
                 effective_reference_date.isoformat()
             )
-        if identified_producer is None:
-            identified_producer = extracted.producer
         if identified_period_start is None:
             identified_period_start = extracted.period_start
         if identified_period_end is None:
             identified_period_end = extracted.period_end
+
+        if identified_producer is None:
+            question_producer, ambiguous_question = extract_producer_from_question(
+                payload.question,
+                exhaustive_records=exhaustive_records,
+            )
+            if ambiguous_question:
+                candidates_desc = ", ".join(
+                    f"{c.producer_id} ({c.producer_name})" if c.producer_name else c.producer_id
+                    for c in ambiguous_question
+                )
+                return build_missing_financial_parameters_response(
+                    effective_reference_date.isoformat(),
+                    reason=(
+                        "A consulta menciona múltiplos produtores "
+                        f"({candidates_desc}), não sendo possível calcular um resumo "
+                        "financeiro único sem esclarecimento."
+                    ),
+                )
+            identified_producer = question_producer or extracted.producer
+
+        if identified_producer is None:
+            history_producer, ambiguous_history = extract_producer_from_history(
+                payload.question,
+                exhaustive_records=exhaustive_records,
+            )
+            if ambiguous_history:
+                candidates_desc = ", ".join(
+                    f"{c.producer_id} ({c.producer_name})" if c.producer_name else c.producer_id
+                    for c in ambiguous_history
+                )
+                return build_missing_financial_parameters_response(
+                    effective_reference_date.isoformat(),
+                    reason=(
+                        "O histórico da conversa menciona múltiplos produtores "
+                        f"({candidates_desc}), não sendo possível identificar qual deles "
+                        "deve ser considerado no cálculo financeiro."
+                    ),
+                )
+            if history_producer is None:
+                return build_missing_financial_parameters_response(
+                    effective_reference_date.isoformat(),
+                    reason=(
+                        "Não foi possível identificar de forma inequívoca o produtor na "
+                        "solicitação nem no histórico da conversa para fundamentar o "
+                        "cálculo financeiro."
+                    ),
+                )
+            grounded_context_producer = history_producer
 
     financial_calculation: FinancialSummaryCalculation | None = None
     if is_financial_query and exhaustive_records is not None and identified_producer:
@@ -432,9 +500,88 @@ async def answer_document_consultation(
             return build_missing_exhaustive_financial_source_response(
                 effective_reference_date.isoformat()
             )
+        if not is_financial_query:
+            extracted_post = extract_financial_query_params(
+                payload.question,
+                reference_date=payload.resolved_reference_date,
+            )
+            effective_reference_date = (
+                payload.resolved_financial_reference_date
+                or extracted_post.reference_date
+                or payload.resolved_reference_date
+            )
+            if (
+                extracted_post.has_invalid_reference_date
+                and payload.resolved_financial_reference_date is None
+            ):
+                return build_missing_financial_parameters_response(
+                    effective_reference_date.isoformat(),
+                    reason=(
+                        "A data de referência explícita informada na consulta é inválida ou "
+                        "não pôde ser interpretada (informe no formato DD/MM/AAAA ou AAAA-MM-DD)."
+                    ),
+                )
+            if (
+                extracted_post.has_invalid_period_date
+                and payload.period_start is None
+                and payload.period_end is None
+            ):
+                return build_missing_financial_parameters_response(
+                    effective_reference_date.isoformat(),
+                    reason=(
+                        "O período informado na consulta financeira é inválido ou inconsistente."
+                    ),
+                )
+            if identified_period_start is None:
+                identified_period_start = extracted_post.period_start
+            if identified_period_end is None:
+                identified_period_end = extracted_post.period_end
+            if identified_producer is None:
+                q_prod, q_ambig = extract_producer_from_question(
+                    payload.question,
+                    exhaustive_records=exhaustive_records,
+                )
+                if q_ambig:
+                    candidates_desc = ", ".join(
+                        f"{c.producer_id} ({c.producer_name})"
+                        if c.producer_name
+                        else c.producer_id
+                        for c in q_ambig
+                    )
+                    return build_missing_financial_parameters_response(
+                        effective_reference_date.isoformat(),
+                        reason=(
+                            "A consulta menciona múltiplos produtores "
+                            f"({candidates_desc}), não sendo possível calcular um resumo "
+                            "financeiro único sem esclarecimento."
+                        ),
+                    )
+                grounded_context_producer = q_prod
+            if identified_producer is None and grounded_context_producer is None:
+                h_prod, h_ambig = extract_producer_from_history(
+                    payload.question,
+                    exhaustive_records=exhaustive_records,
+                )
+                if h_ambig:
+                    candidates_desc = ", ".join(
+                        f"{c.producer_id} ({c.producer_name})"
+                        if c.producer_name
+                        else c.producer_id
+                        for c in h_ambig
+                    )
+                    return build_missing_financial_parameters_response(
+                        effective_reference_date.isoformat(),
+                        reason=(
+                            "O histórico da conversa menciona múltiplos produtores "
+                            f"({candidates_desc}), não sendo possível identificar qual deles "
+                            "deve ser considerado no cálculo financeiro."
+                        ),
+                    )
+                grounded_context_producer = h_prod
         verified_calculation, mismatch_reason = _select_verified_financial_calculation(
             authoritative_calculation=financial_calculation,
             captured_calculations=captured_calculations,
+            expected_context_producer=grounded_context_producer,
             identified_period_start=identified_period_start,
             identified_period_end=identified_period_end,
             effective_reference_date=effective_reference_date,
