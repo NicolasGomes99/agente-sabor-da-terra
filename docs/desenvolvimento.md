@@ -70,6 +70,10 @@ Em `backend/`, rode `uv sync`, aplique as migrações com `uv run alembic upgrad
 
 Para utilizar a interface de desenvolvimento do Google ADK, configure o acesso ao modelo e execute `uv run adk web api` em `backend/`.
 
+A configuração das credenciais dos agentes depende da modalidade de acesso ao Gemini. A Gemini Developer API utiliza uma chave de API, enquanto o Vertex AI utiliza Application Default Credentials (ADC), que podem ser configuradas localmente com `gcloud auth application-default login`. Utilize as variáveis de ambiente correspondentes à modalidade escolhida, sem misturar suas configurações.
+
+Não inclua credenciais ou segredos em arquivos versionados. Consulte a seção de configuração dos agentes em [Infraestrutura](infra.md#configuração-dos-agentes).
+
 Quando um model mudar o esquema do banco, gere uma revisão em `backend/` com `uv run alembic revision --autogenerate -m "describe schema change"`. Confira as operações geradas, valide o `upgrade` e o `downgrade` em um banco descartável e inclua a migração no mesmo pull request do model.
 
 ## Verificações
@@ -80,7 +84,11 @@ Quando um model mudar o esquema do banco, gere uma revisão em `backend/` com `u
 
 ## Publicação
 
-Na nuvem, o build estático da SPA será publicado no Firebase Hosting. A API e os agentes serão publicados juntos no Cloud Run e usarão o PostgreSQL do Cloud SQL. [Infraestrutura](infra.md)
+Na nuvem, o build estático da SPA será publicado no Firebase Hosting. A API e os agentes serão publicados juntos no Cloud Run e usarão o PostgreSQL do Cloud SQL e o bucket privado do Cloud Storage.
+
+A imagem Docker do backend será construída localmente e armazenada no Artifact Registry. As migrações do Alembic serão executadas por meio do Cloud SQL Auth Proxy antes da publicação de uma nova revisão do backend, separadamente da inicialização dos contêineres.
+
+O provisionamento, a publicação, as atualizações e o desprovisionamento serão automatizados por scripts Python utilizando as CLIs do Google Cloud e do Firebase. Os procedimentos de execução serão documentados junto aos scripts. Consulte [Infraestrutura](infra.md) para conhecer os serviços utilizados e as configurações do ambiente publicado.
 
 ## Entrega por funcionalidade
 
