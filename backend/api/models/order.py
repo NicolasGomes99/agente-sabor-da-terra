@@ -1,4 +1,5 @@
 from datetime import date
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -6,19 +7,23 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     ForeignKey,
+    Integer,
     String,
     Uuid,
     false,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
+if TYPE_CHECKING:
+    from .order_item import OrderItem
 
 class Order(Base):
     __tablename__ = "orders"
 
     __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_orders_version_positive"),
         CheckConstraint(
             "delivery_end_date IS NULL "
             "OR delivery_end_date >= delivery_start_date",
@@ -30,6 +35,10 @@ class Order(Base):
         Uuid,
         primary_key=True,
         default=uuid4,
+    )
+
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
     )
 
     session_id: Mapped[UUID | None] = mapped_column(
@@ -69,4 +78,10 @@ class Order(Base):
         nullable=False,
         default=False,
         server_default=false(),
+    )
+
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="OrderItem.id",
     )

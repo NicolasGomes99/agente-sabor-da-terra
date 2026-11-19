@@ -19,6 +19,7 @@ from .repositories.document import DocumentRepository
 from .repositories.order import OrderRepository
 from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
+from .repositories.solicitation import SolicitationRepository
 from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
@@ -26,6 +27,7 @@ from .services.document import DocumentService
 from .services.order import OrderService
 from .services.producer import ProducerService
 from .services.product import ProductService
+from .services.solicitation import SolicitationService
 from .services.user import UserService
 from .storage.base import DocumentStorage
 from .storage.gcs import GCSDocumentStorage
@@ -117,7 +119,19 @@ async def get_current_user(
 
 
 def get_order_service(
-    session: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[
+        AsyncSession,
+        Depends(get_db, scope="function"),
+    ],
 ) -> OrderService:
-    repository = OrderRepository(session)
-    return OrderService(repository)
+    return OrderService(
+        repository=OrderRepository(session),
+        product_repository=ProductRepository(session),
+    )
+
+
+def get_solicitation_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> SolicitationService:
+    return SolicitationService(SolicitationRepository(session))
+

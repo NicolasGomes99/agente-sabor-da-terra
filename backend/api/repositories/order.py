@@ -2,34 +2,52 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..models.order import Order
+from ..models.order_item import OrderItem
 
 
 class OrderRepository:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     def add(self, order: Order) -> None:
         self.session.add(order)
 
     async def list_all(self) -> list[Order]:
-        statement = select(Order).order_by(Order.id)
+        statement = (
+            select(Order)
+            .options(
+                selectinload(Order.items).selectinload(
+                    OrderItem.product
+                ),
+            )
+            .order_by(Order.id)
+        )
+
         result = await self.session.scalars(statement)
 
         return list(result)
 
     async def get_by_id(
-            self,
-            order_id: UUID,
-            *,
-            lock: bool = False,
+        self,
+        order_id: UUID,
+        *,
+        lock: bool = False,
     ) -> Order | None:
-        statement = select(Order).where(Order.id == order_id)
+        statement = (
+            select(Order)
+            .where(Order.id == order_id)
+            .options(
+                selectinload(Order.items).selectinload(
+                    OrderItem.product
+                ),
+            )
+            .execution_options(populate_existing=True)
+        )
 
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=Order)
 
         return await self.session.scalar(statement)
-
-

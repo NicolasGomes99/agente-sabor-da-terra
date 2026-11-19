@@ -124,6 +124,35 @@ describe('DocumentsPage deletion', () => {
     expect(list).toHaveBeenCalledTimes(2)
   })
 
+  it('shows the backend detail when deletion is blocked by a CSV citation', async () => {
+    const csvRecord = { id: 'lotes', original_filename: 'lotes.csv' }
+    const detail =
+      "Não é possível excluir o documento 'lotes.csv' porque ele é citado "
+      + "na conversa 'Consulta de lotes' (registro LOT-2026-0094)."
+    list.mockResolvedValue([csvRecord])
+    remove.mockRejectedValueOnce(new ApiError(409, { detail }))
+    renderPage()
+    const row = await screen.findByRole('listitem')
+
+    confirmDeletion(row)
+
+    expect((await within(row).findByRole('alert')).textContent).toBe(detail)
+    expect(row.isConnected).toBe(true)
+    expect(within(row).getByText('lotes.csv')).toBeTruthy()
+  })
+
+  it('uses a fallback detail for a 409 without a valid detail', async () => {
+    remove.mockRejectedValueOnce(new ApiError(409, { detail: null }))
+    renderPage()
+    const row = await screen.findByRole('listitem')
+
+    confirmDeletion(row)
+
+    expect((await within(row).findByRole('alert')).textContent)
+      .toBe('O documento está citado em uma conversa e não pode ser excluído.')
+    expect(row.isConnected).toBe(true)
+  })
+
   it('logs out when deletion returns 401', async () => {
     setAccessToken('expired-token')
     remove.mockRejectedValueOnce(new ApiError(401, null))
