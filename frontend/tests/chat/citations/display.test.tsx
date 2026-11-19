@@ -1,21 +1,29 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
+import { AuthProvider } from '../../../src/features/auth/AuthContext'
 import { MessageList } from '../../../src/features/chat/components/MessageList'
+import type { ChatMessage } from '../../../src/features/chat/types'
 import {
   citation, excerptCitation, message, recordCitation,
 } from './fixtures'
 
+function renderMessages(messages: ChatMessage[]) {
+  return render(
+    <AuthProvider><MessageList messages={messages} /></AuthProvider>,
+  )
+}
+
 describe('Chat citations display', () => {
   it('does not render a sources section without citations', () => {
-    render(<MessageList messages={[message()]} />)
+    renderMessages([message()])
 
     expect(screen.queryByText('Fontes')).toBeNull()
     expect(screen.queryByRole('region', { name: 'Fontes da resposta' })).toBeNull()
   })
 
   it('renders a documentary excerpt as a source', () => {
-    render(<MessageList messages={[message({ citations: [excerptCitation] })]} />)
+    renderMessages([message({ citations: [excerptCitation] })])
 
     expect(screen.getByRole('region', { name: 'Fontes da resposta' })).toBeTruthy()
     expect(screen.getByText(excerptCitation.label)).toBeTruthy()
@@ -25,7 +33,7 @@ describe('Chat citations display', () => {
   })
 
   it('renders a CSV record with its identifier and fields', () => {
-    render(<MessageList messages={[message({ citations: [recordCitation] })]} />)
+    renderMessages([message({ citations: [recordCitation] })])
 
     const card = screen.getByText(recordCitation.label).closest('li')
     expect(card).toBeTruthy()
@@ -46,7 +54,7 @@ describe('Chat citations display', () => {
       chunk_content: 'conteúdo do registro sem campos',
       record_fields: null,
     })
-    render(<MessageList messages={[message({ citations: [recordWithoutFields] })]} />)
+    renderMessages([message({ citations: [recordWithoutFields] })])
 
     const card = screen.getByText(recordWithoutFields.label).closest('li')
     expect(card?.textContent).toContain('Registro: LOT-2026-0094')
@@ -62,11 +70,9 @@ describe('Chat citations display', () => {
       record_fields: { id_transacao: 'FIN-2026-006', valor: '1020.00' },
       source_type: 'record',
     })
-    render(
-      <MessageList
-        messages={[message({ citations: [excerptCitation, recordCitation, secondCitation] })]}
-      />,
-    )
+    renderMessages([
+      message({ citations: [excerptCitation, recordCitation, secondCitation] }),
+    ])
 
     const region = screen.getByRole('region', { name: 'Fontes da resposta' })
     const items = within(region).getAllByRole('listitem')
@@ -77,11 +83,9 @@ describe('Chat citations display', () => {
   })
 
   it('does not show sources on user messages', () => {
-    render(
-      <MessageList
-        messages={[message({ role: 'user', citations: [recordCitation] })]}
-      />,
-    )
+    renderMessages([
+      message({ role: 'user', citations: [recordCitation] }),
+    ])
 
     expect(screen.queryByText('Fontes')).toBeNull()
     expect(screen.queryByText(recordCitation.label)).toBeNull()
