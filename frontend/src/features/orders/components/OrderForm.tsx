@@ -6,13 +6,14 @@ import { useAuth } from '../../auth/useAuth'
 import { listProducts } from '../../registry/registryApi'
 import type { Product } from '../../registry/types'
 import { validQuantity } from '../orderHelpers'
-import type { OrderRecord, OrderUpdate } from '../ordersApi'
+import type { OrderRecord, OrderFormData } from '../ordersApi'
 
 interface OrderFormProps {
   initial?: OrderRecord
   pending: boolean
+  conflict?: boolean
   error: string | null
-  onSubmit: (data: OrderUpdate) => Promise<void>
+  onSubmit: (data: OrderFormData) => Promise<void>
   backTo: string
 }
 
@@ -41,6 +42,7 @@ function emptyRow(key: string): ItemRow {
 export function OrderForm({
   initial,
   pending,
+  conflict = false,
   error,
   onSubmit,
   backTo,
@@ -135,7 +137,7 @@ export function OrderForm({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (pending || submitting.current) return
+    if (pending || conflict || submitting.current) return
 
     if (!available) {
       setValidation(
@@ -442,7 +444,7 @@ export function OrderForm({
           <button
             className="order-button order-primary"
             type="submit"
-            disabled={pending || !available}
+            disabled={pending || conflict || !available}
           >
             {pending
               ? 'Salvando…'

@@ -5,30 +5,35 @@ import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
 import { OrderForm } from '../components/OrderForm'
-import { orderError } from '../orderHelpers'
+import { isOrderVersionConflict, orderError } from '../orderHelpers'
 import {
   createOrder,
   updateOrder,
   type OrderRecord,
-  type OrderUpdate,
+  type OrderFormData,
 } from '../ordersApi'
 import { useOrder } from '../useOrder'
 import './orders.css'
 
-function FormContent({ order }: { order?: OrderRecord }) {
+function FormContent({ order, onReload }: {
+  order?: OrderRecord
+  onReload?: () => void
+}) {
   const navigate = useNavigate()
   const { logout } = useAuth()
 
+  const [conflict, setConflict] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function save(payload: OrderUpdate) {
+  async function save(payload: OrderFormData) {
+    if (conflict) return
     setPending(true)
     setError(null)
 
     try {
       const saved = order
-        ? await updateOrder(order.id, payload)
+        ? await updateOrder(order.id, { ...payload, version: order.version })
         : await createOrder({
             ...payload,
             items: payload.items.map(
@@ -52,6 +57,7 @@ function FormContent({ order }: { order?: OrderRecord }) {
       if (cause instanceof ApiError && cause.status === 401) {
         logout()
       } else {
+        setConflict(isOrderVersionConflict(cause))
         setError(orderError(cause))
       }
     } finally {
@@ -73,13 +79,22 @@ function FormContent({ order }: { order?: OrderRecord }) {
   }
 
   return (
+    <>
+      {conflict && <div className="order-notice">
+        <p>Recarregar descarta as alterações deste formulário e busca os dados atuais.</p>
+        <button className="order-button" type="button" onClick={onReload}>
+          Recarregar pedido
+        </button>
+      </div>}
     <OrderForm
       initial={order}
       pending={pending}
+      conflict={conflict}
       error={error}
       onSubmit={save}
       backTo={order ? `/orders/${order.id}` : '/orders'}
     />
+    </>
   )
 }
 
@@ -111,6 +126,7 @@ function EditContent({ id }: { id: string }) {
     <FormContent
       key={state.order.id}
       order={state.order}
+      onReload={retry}
     />
   )
 }

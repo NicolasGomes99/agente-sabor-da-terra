@@ -7,12 +7,12 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from api.models.order import Order
-from api.models.product import Product
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api import database
 from api.app import app
+from api.models.order import Order
+from api.models.product import Product
 from api.models.user import User
 from api.services.auth import AuthService
 
@@ -140,7 +140,7 @@ async def test_update_preserves_item_ids_and_saves_interval(
     created = await create(client, headers, payload(product_ids))
     before = await read(client, headers, created["id"])
     ids = {item["product_id"]: item["id"] for item in before["items"]}
-    updated = payload(product_ids)
+    updated = {**payload(product_ids), "version": before["version"]}
     updated["buyer"] = "Comprador atualizado"
     updated["delivery_end_date"] = "2026-12-07"
     for item in updated["items"]:
@@ -225,6 +225,7 @@ async def test_invalid_update_preserves_saved_order(
     before = await read(client, headers, order_id)
     ids = {item["product_id"]: item["id"] for item in before["items"]}
     data = payload(product_ids)
+    data["version"] = before["version"]
     data["buyer"] = "Este nome não deve ser salvo"
     for item in data["items"]:
         item["id"] = ids[item["product_id"]]
@@ -244,6 +245,7 @@ async def test_foreign_item_id_does_not_change_either_order(
     before_first = await read(client, headers, first["id"])
     before_second = await read(client, headers, second["id"])
     data = payload(product_ids)
+    data["version"] = before_first["version"]
     data["items"][0]["id"] = before_second["items"][0]["id"]
     response = await client.put(f"/orders/{first['id']}", headers=headers, json=data)
     assert response.status_code == 422, response.text
@@ -275,7 +277,7 @@ async def test_legacy_order_remains_readable_and_can_be_structured(
     assert before["items"] == []
     assert before["needs_item_structuring"] is True
     response = await client.put(
-        f"/orders/{order_id}", headers=headers, json=payload(product_ids)
+        f"/orders/{order_id}", headers=headers, json={**payload(product_ids), "version": before["version"]}
     )
     assert response.status_code == 200, response.text
     after = await read(client, headers, str(order_id))
@@ -295,9 +297,9 @@ async def test_cancel_keeps_items_readable_and_blocks_editing(
     response = await client.post(f"/orders/{order_id}/cancel", headers=headers)
     assert response.status_code == 200, response.text
     after = await read(client, headers, order_id)
-    assert after == {**before, "cancelled": True}
+    assert after == {**before, "cancelled": True, "version": before["version"] + 1}
     response = await client.put(
-        f"/orders/{order_id}", headers=headers, json=payload(product_ids)
+        f"/orders/{order_id}", headers=headers, json={**payload(product_ids), "version": before["version"]}
     )
     assert response.status_code == 409, response.text
     assert await read(client, headers, order_id) == after
@@ -326,7 +328,7 @@ async def test_all_order_routes_require_valid_jwt(
         method,
         path.format(id=uuid4()),
         headers=request_headers,
-        json=payload(product_ids),
+        json={**payload(product_ids), **({"version": 1} if method == "PUT" else {})},
     )
     assert response.status_code == 401, response.text
 
@@ -345,6 +347,6 @@ async def test_missing_order_returns_404(
         method,
         f"/orders/{uuid4()}{suffix}",
         headers=headers,
-        json=payload(product_ids),
+        json={**payload(product_ids), **({"version": 1} if method == "PUT" else {})},
     )
     assert response.status_code == 404, response.text

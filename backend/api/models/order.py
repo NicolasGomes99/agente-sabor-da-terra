@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     ForeignKey,
+    Integer,
     String,
     Uuid,
     false,
@@ -22,6 +23,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_orders_version_positive"),
         CheckConstraint(
             "delivery_end_date IS NULL "
             "OR delivery_end_date >= delivery_start_date",
@@ -33,6 +35,10 @@ class Order(Base):
         Uuid,
         primary_key=True,
         default=uuid4,
+    )
+
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
     )
 
     session_id: Mapped[UUID | None] = mapped_column(

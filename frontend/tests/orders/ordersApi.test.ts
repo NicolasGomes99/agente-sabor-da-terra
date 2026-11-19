@@ -40,6 +40,7 @@ const record: OrderRecord = {
   ...payload,
   id: 'order-id',
   session_id: null,
+  version: 1,
   cancelled: false,
   products: '',
   needs_item_structuring: false,
@@ -115,6 +116,7 @@ describe('API de pedidos', () => {
   it('envia PUT preservando o ID do item existente', async () => {
     const edited: OrderUpdate = {
       ...payload,
+      version: record.version,
       items: [
         {
           id: 'item-id',

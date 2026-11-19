@@ -24,12 +24,17 @@ export interface OrderInput {
   items: OrderItemInput[]
 }
 
-export interface OrderUpdate extends Omit<OrderInput, 'items'> {
+export interface OrderFormData extends Omit<OrderInput, 'items'> {
   items: OrderItemUpdate[]
+}
+
+export interface OrderUpdate extends OrderFormData {
+  version: number
 }
 
 export interface OrderRecord extends Omit<OrderInput, 'items'> {
   id: string
+  version: number
   session_id: string | null
   cancelled: boolean
   products: string

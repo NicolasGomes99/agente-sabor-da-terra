@@ -3,6 +3,9 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from api.models.order import Order
 from api.models.order_item import OrderItem
 from api.models.product import Product
@@ -10,8 +13,6 @@ from api.repositories.order import OrderRepository
 from api.repositories.product import ProductRepository
 from api.schemas.order import OrderCreate, OrderResponse, OrderUpdate
 from api.services.order import OrderCancelledError, OrderService, OrderValidationError
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,10 +53,11 @@ def create_payload(items: list[dict]) -> OrderCreate:
     )
 
 
-def update_payload(items: list[dict]) -> OrderUpdate:
+def update_payload(items: list[dict], *, version: int = 1) -> OrderUpdate:
     return OrderUpdate.model_validate(
         {
             "buyer": "Comprador atualizado",
+            "version": version,
             "conditions": "Entrega à tarde",
             "delivery_start_date": "2026-12-06",
             "delivery_end_date": "2026-12-08",
@@ -254,9 +256,68 @@ async def test_cancel_preserves_items_and_rejects_further_edits(
     before = await snapshot(service, order_id)
     await service.cancel_order(order_id)
     after = await snapshot(service, order_id)
-    assert after == {**before, "cancelled": True}
+    assert after == {**before, "cancelled": True, "version": before["version"] + 1}
     with pytest.raises(OrderCancelledError):
         await service.update_order(
             order_id, update_payload([item(first, "99", id=item_id)])
         )
     assert await snapshot(service, order_id) == after
+
+
+async def test_create_links_session_and_items_in_one_transaction(
+    service: OrderService,
+    product_ids: tuple[UUID, UUID],
+    db_session: AsyncSession,
+) -> None:
+    from api.models.chat_session import ChatSession
+    from api.models.user import User
+
+    user_id, session_id = uuid4(), uuid4()
+    db_session.add(User(id=user_id, email=f"{user_id}@example.com", password_hash="test"))
+    await db_session.flush()
+    db_session.add(ChatSession(id=session_id, user_id=user_id))
+    await db_session.commit()
+    first, second = product_ids
+    created = await service.create_order(
+        create_payload([item(first), item(second)]), session_id=session_id,
+    )
+    order_id = created.id
+    db_session.expunge_all()
+    saved = await snapshot(service, order_id)
+    assert saved["session_id"] == str(session_id)
+    assert saved["version"] == 1
+    assert len(saved["items"]) == 2
+    assert {entry["product_id"] for entry in saved["items"]} == {str(first), str(second)}
+
+
+@pytest.mark.parametrize("failure", ["unknown-product", "missing-session", "duplicate-session"])
+async def test_failed_linked_create_leaves_no_partial_order_or_items(
+    service: OrderService,
+    product_ids: tuple[UUID, UUID],
+    db_session: AsyncSession,
+    failure: str,
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from api.models.chat_session import ChatSession
+    from api.models.user import User
+
+    first, second = product_ids
+    user_id, session_id = uuid4(), uuid4()
+    db_session.add(User(id=user_id, email=f"{user_id}@example.com", password_hash="test"))
+    await db_session.flush()
+    db_session.add(ChatSession(id=session_id, user_id=user_id))
+    await db_session.commit()
+    if failure == "duplicate-session":
+        await service.create_order(create_payload([item(first)]), session_id=session_id)
+    before_orders = await db_session.scalar(select(func.count()).select_from(Order))
+    before_items = await db_session.scalar(select(func.count()).select_from(OrderItem))
+    error = OrderValidationError if failure == "unknown-product" else IntegrityError
+    with pytest.raises(error):
+        await service.create_order(
+            create_payload([item(first), item(uuid4() if failure == "unknown-product" else second)]),
+            session_id=uuid4() if failure == "missing-session" else session_id,
+        )
+    assert await db_session.scalar(select(func.count()).select_from(Order)) == before_orders
+    assert await db_session.scalar(select(func.count()).select_from(OrderItem)) == before_items
+    assert await db_session.get(ChatSession, session_id) is not None

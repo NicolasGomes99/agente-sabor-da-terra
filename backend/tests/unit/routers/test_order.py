@@ -45,6 +45,7 @@ def order_service(monkeypatch: pytest.MonkeyPatch) -> Mock:
     def make_order(*, cancelled: bool) -> Order:
         return Order(
             id=ORDER_ID,
+            version=2 if cancelled else 1,
             session_id=None,
             buyer=PAYLOAD["buyer"],
             products="",
@@ -137,6 +138,7 @@ async def test_order_routes_remain_registered(
     if method == "PUT":
         payload = {
             **PAYLOAD,
+            "version": 1,
             "items": [
                 {
                     **PAYLOAD["items"][0],
@@ -195,3 +197,15 @@ def test_order_dependency_injects_the_session() -> None:
     service = get_order_service(session)
     assert isinstance(service, OrderService)
     assert service.repository.session is session
+
+
+@pytest.mark.asyncio
+async def test_stale_order_maps_to_conflict(
+    client: httpx.AsyncClient, order_service: Mock,
+) -> None:
+    from api.services.order import OrderConflictError
+
+    order_service.update_order.side_effect = OrderConflictError("Pedido alterado.")
+    response = await client.put(f"/orders/{ORDER_ID}", json={**PAYLOAD, "version": 1})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "order_version_conflict"

@@ -12,6 +12,7 @@ from ..schemas.order import (
 )
 from ..services.order import (
     OrderCancelledError,
+    OrderConflictError,
     OrderNotFoundError,
     OrderService,
     OrderValidationError,
@@ -80,6 +81,12 @@ async def update_order(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
+        ) from error
+
+    except OrderConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "order_version_conflict", "message": str(error)},
         ) from error
 
     except OrderCancelledError as error:

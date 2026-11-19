@@ -1,8 +1,9 @@
 from uuid import uuid4
 
 import pytest
-from api.schemas.order import OrderCreate, OrderResponse, OrderUpdate
 from pydantic import ValidationError
+
+from api.schemas.order import OrderCreate, OrderResponse, OrderUpdate
 
 
 def valid_payload() -> dict:
@@ -51,6 +52,8 @@ def test_create_rejects_blank_unit(unit: str) -> None:
 @pytest.mark.parametrize("schema", [OrderCreate, OrderUpdate])
 def test_write_requires_items(schema) -> None:
     payload = valid_payload()
+    if schema is OrderUpdate:
+        payload["version"] = 1
     payload["items"] = []
     with pytest.raises(ValidationError):
         schema.model_validate(payload)
@@ -59,6 +62,8 @@ def test_write_requires_items(schema) -> None:
 @pytest.mark.parametrize("schema", [OrderCreate, OrderUpdate])
 def test_write_rejects_inverted_dates(schema) -> None:
     payload = valid_payload()
+    if schema is OrderUpdate:
+        payload["version"] = 1
     payload["delivery_end_date"] = "2026-12-04"
     with pytest.raises(ValidationError):
         schema.model_validate(payload)
@@ -79,7 +84,7 @@ def test_create_rejects_client_assigned_item_id() -> None:
 
 
 def test_update_accepts_existing_and_new_items() -> None:
-    payload = valid_payload()
+    payload = {**valid_payload(), "version": 1}
     item_id = uuid4()
     payload["items"][0]["id"] = str(item_id)
     payload["items"].append(
@@ -95,7 +100,7 @@ def test_update_accepts_existing_and_new_items() -> None:
 
 
 def test_update_rejects_duplicate_item_ids() -> None:
-    payload = valid_payload()
+    payload = {**valid_payload(), "version": 1}
     payload["items"][0]["id"] = str(uuid4())
     payload["items"].append(dict(payload["items"][0]))
     with pytest.raises(ValidationError):
@@ -107,6 +112,7 @@ def test_response_preserves_legacy_description_and_marks_pending_items() -> None
         {
             "id": str(uuid4()),
             "session_id": None,
+            "version": 1,
             "buyer": "Pedido antigo",
             "conditions": "",
             "delivery_start_date": "2026-12-05",
@@ -136,6 +142,7 @@ def test_response_includes_item_id_and_product() -> None:
             **payload,
             "id": str(uuid4()),
             "session_id": None,
+            "version": 1,
             "cancelled": False,
             "products": "",
         }
@@ -143,3 +150,19 @@ def test_response_includes_item_id_and_product() -> None:
     assert response["needs_item_structuring"] is False
     assert response["items"][0]["id"] == item_id
     assert response["items"][0]["product"]["name"] == "Tomate"
+
+
+@pytest.mark.parametrize("version", [0, -1, True, 1.5, "1", None])
+def test_update_rejects_invalid_version(version) -> None:
+    with pytest.raises(ValidationError):
+        OrderUpdate.model_validate({**valid_payload(), "version": version})
+
+
+def test_update_requires_version() -> None:
+    with pytest.raises(ValidationError):
+        OrderUpdate.model_validate(valid_payload())
+
+
+def test_direct_create_does_not_accept_session_id() -> None:
+    with pytest.raises(ValidationError):
+        OrderCreate.model_validate({**valid_payload(), "session_id": str(uuid4())})

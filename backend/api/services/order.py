@@ -21,6 +21,10 @@ class OrderCancelledError(ValueError):
     pass
 
 
+class OrderConflictError(ValueError):
+    pass
+
+
 class OrderValidationError(ValueError):
     pass
 
@@ -88,11 +92,17 @@ class OrderService:
             unit=data.unit,
         )
 
-    async def create_order(self, data: OrderCreate) -> Order:
+    async def create_order(
+        self,
+        data: OrderCreate,
+        *,
+        session_id: UUID | None = None,
+    ) -> Order:
         try:
             products = await self._get_products(data.items)
 
             order = Order(
+                session_id=session_id,
                 buyer=data.buyer,
                 products="",
                 conditions=data.conditions,
@@ -131,6 +141,14 @@ class OrderService:
             if order.cancelled:
                 raise OrderCancelledError(
                     "Um pedido cancelado não pode ser editado."
+                )
+
+            # Check only after obtaining the row lock and loading the current state.
+            # A second writer waiting on the lock must compare against the new version.
+            if data.version != order.version:
+                raise OrderConflictError(
+                    "Este pedido foi alterado desde que o formulário foi aberto. "
+                    "Recarregue o pedido e revise suas alterações antes de salvar."
                 )
 
             existing_items = {
@@ -175,6 +193,7 @@ class OrderService:
             order.delivery_end_date = data.delivery_end_date
 
             order.items = updated_items
+            order.version += 1
 
             await self.repository.session.commit()
 
@@ -191,7 +210,9 @@ class OrderService:
                 lock=True,
             )
 
-            order.cancelled = True
+            if not order.cancelled:
+                order.cancelled = True
+                order.version += 1
 
             await self.repository.session.commit()
 

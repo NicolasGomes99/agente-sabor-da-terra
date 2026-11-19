@@ -52,6 +52,7 @@ const order: OrderRecord = {
   delivery_start_date: '2026-12-05',
   delivery_end_date: null,
   session_id: null,
+  version: 1,
   cancelled: false,
   products: '',
   needs_item_structuring: false,
@@ -258,6 +259,7 @@ describe('Telas de pedidos', () => {
       expect(update).toHaveBeenCalledExactlyOnceWith(
         order.id,
         expect.objectContaining({
+          version: order.version,
           items: [
             {
               id: item.id,
@@ -476,4 +478,37 @@ describe('Telas de pedidos', () => {
     expect(button.hasAttribute('disabled')).toBe(true)
     expect(create).not.toHaveBeenCalled()
   })
+  it('preserva o formulário em conflito e só usa a nova versão após recarregar', async () => {
+    update.mockRejectedValueOnce(new ApiError(409, {
+      detail: { code: 'order_version_conflict', message: 'Pedido alterado.' },
+    }))
+    openPage('/orders/order-id/edit')
+    await screen.findByRole('option', { name: 'Tomate' })
+    const buyer = screen.getByLabelText(/Comprador/)
+    fireEvent.change(buyer, { target: { value: 'Minha edição' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('alterado por outra operação')
+    expect((buyer as HTMLInputElement).value).toBe('Minha edição')
+    expect(screen.getByRole('button', { name: 'Salvar alterações' }).hasAttribute('disabled')).toBe(true)
+    expect(update.mock.calls[0][1].version).toBe(1)
+
+    const current: OrderRecord = {
+      ...order, version: 2, buyer: 'Outra pessoa salvou',
+      items: [...order.items, {
+        id: 'new-item-id', product_id: lettuce.id, product: lettuce, quantity: '5', unit: 'un',
+      }],
+    }
+    get.mockResolvedValue(current)
+    update.mockResolvedValue({ ...current, version: 3 })
+    fireEvent.click(screen.getByRole('button', { name: 'Recarregar pedido' }))
+    await screen.findAllByRole('option', { name: 'Tomate' })
+    expect((screen.getByLabelText(/Comprador/) as HTMLInputElement).value).toBe(current.buyer)
+    expect(screen.getByLabelText('Produto 2 *')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Unidade 1 *'), { target: { value: 'caixa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+    expect(update.mock.calls[1][1].version).toBe(2)
+    expect(update.mock.calls[1][1].items.map((entry) => entry.id)).toEqual([item.id, 'new-item-id'])
+  })
+
 })

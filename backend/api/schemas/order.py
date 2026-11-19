@@ -76,6 +76,7 @@ class OrderCreate(OrderBase):
 
 
 class OrderUpdate(OrderBase):
+    version: int = Field(ge=1, strict=True)
     items: list[OrderItemUpdate] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -101,6 +102,7 @@ class OrderResponse(OrderBase):
 )
 
     id: UUID
+    version: int = Field(ge=1)
     session_id: UUID | None
     cancelled: bool
 

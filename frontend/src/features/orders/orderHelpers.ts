@@ -19,10 +19,23 @@ export function deliveryLabel(order: OrderRecord): string {
   return start
 }
 
+export function isOrderVersionConflict(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false
+  const details = error.details
+  if (typeof details !== 'object' || details === null || !('detail' in details)) return false
+  const detail = details.detail
+  return typeof detail === 'object' && detail !== null &&
+    'code' in detail && detail.code === 'order_version_conflict'
+}
+
 export function orderError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 404) {
       return 'Pedido não encontrado. Ele pode estar indisponível.'
+    }
+
+    if (isOrderVersionConflict(error)) {
+      return 'Este pedido foi alterado por outra operação. Suas alterações ainda não foram salvas. Recarregue o pedido e revise os dados antes de tentar novamente.'
     }
 
     if (error.status === 409) {
