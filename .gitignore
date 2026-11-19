@@ -23,3 +23,7 @@ npm-debug.log*
 # Arquivos do sistema
 .DS_Store
 Thumbs.db
+
+# Armazenamento local de documentos e artefatos de desenvolvimento
+backend/storage/
+backend/*.zip
