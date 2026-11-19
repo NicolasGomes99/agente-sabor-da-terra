@@ -5,9 +5,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from ..helpers.units import sum_quantities_in_unit
 from .base import Base
 
 if TYPE_CHECKING:
+    from .lot import Lot
     from .order import Order
     from .product import Product
 
@@ -59,3 +61,19 @@ class OrderItem(Base):
     )
 
     product: Mapped["Product"] = relationship()
+
+    lots: Mapped[list["Lot"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="Lot.id",
+    )
+
+    @property
+    def balance(self) -> Decimal | None:
+        allocated = sum_quantities_in_unit(
+            [(lot.quantity, lot.unit) for lot in self.lots],
+            self.unit,
+        )
+        if allocated is None:
+            return None
+        return (self.quantity - allocated).quantize(Decimal("0.001"))
