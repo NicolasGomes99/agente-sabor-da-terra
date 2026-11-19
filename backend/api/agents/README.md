@@ -28,7 +28,9 @@ A função assíncrona **`orchestrate_request`** é o ponto de entrada oficial d
 | `message_received_at` | `datetime \| date \| str \| None` | Data/hora original de recebimento da mensagem em análise quando informada separadamente da data da interação no chat. |
 | `is_new_triage_message` | `bool \| None` | Indica explicitamente se o turno inicia uma nova análise (`True`) ou continua a análise atual (`False`); quando `None`, o orquestrador detecta automaticamente por `source_id`, `message_received_at` ou intenção do texto. |
 | `sender`, `buyer_name`, `channel`, `source_id` | `str \| None` | Metadados opcionais do canal de entrada para a triagem. |
-| `sources` | `list[ConsultationSourceItem]` | Trechos documentais (`DocumentChunk`) e registros recuperados para consultas documentais. |
+| `sources` | `list[ConsultationSourceItem]` | Trechos documentais (`DocumentChunk`) e registros recuperados por busca para consultas documentais. |
+| `financial_records` | `list[ConsultationSourceItem] \| None` | Coleção exaustiva de registros de `financeiro.csv` indexados no RAG para resumos financeiros (alternativa ou complemento ao parâmetro `financial_records_provider` de `orchestrate_request`). |
+| `producer_id`, `period_start`, `period_end`, `financial_reference_date` | `str \| date \| datetime \| None` | Parâmetros opcionais de produtor, período e data de referência do cálculo financeiro (também extraíveis de consultas em linguagem natural, distintos da data da interação). |
 | `history` | `list[ConversationTurn]` | Histórico prévio da sessão aberta, enviado em bloco separado do texto da mensagem em análise. |
 
 ### Retorno: `OrchestratorResponse` (`api.agents.schemas.OrchestratorResponse`)

@@ -48,6 +48,14 @@ _CONSULTATION_KEYWORDS: tuple[str, ...] = (
     "ficha técnica",
     "ficha tecnica",
     "adagro",
+    "financeiro",
+    "financeira",
+    "resumo",
+    "vendas",
+    "pagamentos",
+    "a receber",
+    "pendências",
+    "pendencias",
 )
 
 
@@ -61,7 +69,8 @@ def create_intent_router_agent(model: str | None = None) -> Agent:
             "atendida pelo fluxo 'triage' (análise/triagem de mensagem de pedido, "
             "oferta, cotação ou esclarecimento de triagem) ou 'consultation' "
             "(pergunta sobre certificações orgânicas, validade, lotes, "
-            "rastreabilidade ou documentos da cooperativa)."
+            "rastreabilidade, resumo financeiro por produtor, vendas, pagamentos, "
+            "pendências ou documentos da cooperativa)."
         ),
         output_schema=IntentRouteDecision,
         output_key=ROUTER_OUTPUT_KEY,

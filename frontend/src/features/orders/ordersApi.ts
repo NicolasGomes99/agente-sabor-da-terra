@@ -11,9 +11,29 @@ export interface OrderItemUpdate extends OrderItemInput {
   id?: string
 }
 
+export interface LotRecord {
+  id: string
+  item_id: string | null
+  producer: { id: string; name: string }
+  quantity: string
+  unit: string | null
+  delivery_date: string
+  availability_confirmed: boolean | null
+}
+
+export interface LotInput {
+  producer_id: string
+  quantity: string
+  unit: string
+  delivery_date: string
+  availability_confirmed: boolean
+}
+
 export interface OrderItemRecord extends OrderItemInput {
   id: string
   product: Product
+  lots?: LotRecord[]
+  balance?: string | null
 }
 
 export interface OrderInput {
@@ -79,5 +99,35 @@ export function updateOrder(
 export function cancelOrder(id: string): Promise<OrderRecord> {
   return apiRequest(`/orders/${encodeURIComponent(id)}/cancel`, {
     method: 'POST',
+  })
+}
+
+export function createLot(
+  orderId: string,
+  itemId: string,
+  payload: LotInput,
+): Promise<LotRecord> {
+  return apiRequest(
+    `/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/lots`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function updateLot(
+  lotId: string,
+  payload: LotInput,
+): Promise<LotRecord> {
+  return apiRequest(`/lots/${encodeURIComponent(lotId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteLot(lotId: string): Promise<void> {
+  return apiRequest(`/lots/${encodeURIComponent(lotId)}`, {
+    method: 'DELETE',
   })
 }
