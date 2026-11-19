@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.chat_message import ChatMessage
+from ..models.chat_message import ChatMessage, ChatMessageRole
 from ..models.chat_session import ChatSession
 
 
@@ -29,7 +29,13 @@ class ChatRepository:
         )
         return await self.session.scalar(stmt)
 
-    async def add_message(self, session_id: UUID, content: str) -> ChatMessage:
+    async def add_message(
+        self,
+        session_id: UUID,
+        content: str,
+        *,
+        role: ChatMessageRole = ChatMessageRole.USER,
+    ) -> ChatMessage:
         next_position = await self.session.scalar(
             select(func.coalesce(func.max(ChatMessage.position), 0) + 1)
             .where(ChatMessage.session_id == session_id)
@@ -37,6 +43,7 @@ class ChatRepository:
         msg = ChatMessage(
             session_id=session_id,
             content=content,
+            role=role,
             position=next_position,
         )
         self.session.add(msg)
