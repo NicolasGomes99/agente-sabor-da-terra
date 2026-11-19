@@ -7,6 +7,7 @@ from .order import Order
 from .producer import Producer
 from .producer_product import ProducerProduct
 from .product import Product
+from .solicitation import Solicitation
 from .user import User
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "Producer",
     "ProducerProduct",
     "Product",
+    "Solicitation",
     "User",
 ]

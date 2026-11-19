@@ -8,6 +8,11 @@ from .agent import (
     format_consultation_prompt,
     root_agent,
 )
+from .reconciliation import (
+    INSUFFICIENT_SOURCES_MESSAGE,
+    build_insufficient_sources_message,
+    reconcile_consultation_sources,
+)
 from .schemas import (
     CitedSource,
     ConsultationGapOrDivergence,
@@ -15,12 +20,12 @@ from .schemas import (
     ConsultationResponse,
     ConsultationSourceItem,
     SourceKind,
-    reconcile_consultation_sources,
 )
 
 __all__ = [
     "CONSULTATION_APP_NAME",
     "CONSULTATION_OUTPUT_KEY",
+    "INSUFFICIENT_SOURCES_MESSAGE",
     "CitedSource",
     "ConsultationGapOrDivergence",
     "ConsultationInput",
@@ -29,6 +34,7 @@ __all__ = [
     "SourceKind",
     "answer_document_consultation",
     "build_consultation_instruction",
+    "build_insufficient_sources_message",
     "consultation_agent",
     "create_consultation_agent",
     "format_consultation_prompt",
