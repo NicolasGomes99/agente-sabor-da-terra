@@ -109,17 +109,21 @@ def format_triage_prompt(payload: TriageInput) -> str:
         metadata_lines.append(f"comprador_informado: {payload.buyer_name}")
 
     metadata_block = "\n".join(metadata_lines)
-    return (
-        "<metadados_recebimento>\n"
-        f"{metadata_block}\n"
-        "</metadados_recebimento>\n\n"
-        "<calendario_referencia>\n"
-        f"{calendar_context}\n"
-        "</calendario_referencia>\n\n"
-        "<mensagem_recebida>\n"
-        f"{payload.message_text}\n"
-        "</mensagem_recebida>"
+    sections = [
+        f"<metadados_recebimento>\n{metadata_block}\n</metadados_recebimento>",
+        f"<calendario_referencia>\n{calendar_context}\n</calendario_referencia>",
+    ]
+    if payload.conversation_history:
+        history_block = payload.conversation_history
+        if not history_block.startswith("<historico_sessao_atual>"):
+            history_block = (
+                f"<historico_sessao_atual>\n{history_block}\n</historico_sessao_atual>"
+            )
+        sections.append(history_block)
+    sections.append(
+        f"<mensagem_recebida>\n{payload.message_text}\n</mensagem_recebida>"
     )
+    return "\n\n".join(sections)
 
 
 def build_triage_instruction(context: ReadonlyContext) -> str:

@@ -168,6 +168,75 @@ def test_reconcile_consultation_sources_filters_unknown_ids_and_fills_metadata()
 
 
 @pytest.mark.asyncio
+async def test_consultation_reconciliation_overrides_divergent_metadata_and_keeps_missing_values_none() -> None:
+    # Critério 1 da #37 (Consulta): saída simulada com source_id válido e document_id ou
+    # referência divergentes usa os metadados da fonte recuperada e mantém None quando a fonte não informa
+    payload = ConsultationInput(
+        question="Quais informações constam nas duas fontes recuperadas?",
+        reference_date="2026-10-30",
+        sources=[
+            ConsultationSourceItem(
+                source_id="src-with-meta",
+                document_id="doc-real-001",
+                document_name="cert_organica_jose_santos_P002.txt",
+                reference_label="ORG-PE-2025-003198",
+                content="Certificado válido até 20/03/2027.",
+            ),
+            ConsultationSourceItem(
+                source_id="src-without-optional-meta",
+                document_id=None,
+                document_name="anotacao_operacional.txt",
+                reference_label=None,
+                content="Observação interna sem identificador de registro.",
+            ),
+        ],
+    )
+    simulated_output = {
+        "answer": "Resumo com base nas fontes recuperadas em 30/10/2026.",
+        "reference_date_used": "2026-10-30",
+        "source_ids": ["src-with-meta", "src-without-optional-meta"],
+        "cited_sources": [
+            {
+                "source_id": "src-with-meta",
+                "document_id": "doc-divergente-999",
+                "document_name": "nome_divergente.txt",
+                "reference_label": "REF-DIVERGENTE-999",
+                "supporting_excerpt": "Trecho real 1.",
+            },
+            {
+                "source_id": "src-without-optional-meta",
+                "document_id": "doc-inventado-888",
+                "document_name": "outro_nome.txt",
+                "reference_label": "REF-INVENTADA-888",
+                "supporting_excerpt": "Trecho real 2.",
+            },
+        ],
+        "gaps_and_divergences": [],
+        "has_sufficient_data": True,
+    }
+
+    runner = FakeConsultationRunner(simulated_output)
+    result = await answer_document_consultation(payload, runner=runner)
+
+    assert result.source_ids == ["src-with-meta", "src-without-optional-meta"]
+    assert len(result.cited_sources) == 2
+
+    first_cited = result.cited_sources[0]
+    assert first_cited.source_id == "src-with-meta"
+    assert first_cited.document_id == "doc-real-001"
+    assert first_cited.document_name == "cert_organica_jose_santos_P002.txt"
+    assert first_cited.reference_label == "ORG-PE-2025-003198"
+    assert first_cited.supporting_excerpt == "Trecho real 1."
+
+    second_cited = result.cited_sources[1]
+    assert second_cited.source_id == "src-without-optional-meta"
+    assert second_cited.document_id is None
+    assert second_cited.document_name == "anotacao_operacional.txt"
+    assert second_cited.reference_label is None
+    assert second_cited.supporting_excerpt == "Trecho real 2."
+
+
+@pytest.mark.asyncio
 async def test_consultation_verifies_organic_certification_validity_and_divergence() -> None:
     # Critérios 1, 3 e 4 da #14: verifica cobertura e vigência na data de referência
     # (P002 vigente até 20/03/2027; P008 vencida em 30/09/2026 e divergente com LOT-2026-0104)
@@ -357,7 +426,13 @@ async def test_consultation_traces_lot_0094_and_flags_ambiguous_unit_in_lot_0099
 
 @pytest.mark.asyncio
 async def test_consultation_handles_empty_sources_without_inventing() -> None:
-    # Critério 4 da #14 + RF07: sem fontes, informa ausência sem inventar
+    # Critério 2 da #37 (Consulta) + RF07: com lista de fontes vazia, retorna mensagem
+    # definida pelo código, indica dados insuficientes, sem citações e sem exibir conclusão simulada do modelo
+    from api.agents.consultation.reconciliation import (
+        INSUFFICIENT_SOURCES_MESSAGE,
+        build_insufficient_sources_message,
+    )
+
     payload = ConsultationInput(
         question="Existe certificado fitossanitário internacional para exportação de maracujá?",
         reference_date="2026-10-30",
@@ -366,15 +441,20 @@ async def test_consultation_handles_empty_sources_without_inventing() -> None:
 
     simulated_output = {
         "answer": (
-            "Considerando a data de referência 30/10/2026, não foram encontrados "
-            "documentos ou registros sobre certificado fitossanitário internacional "
-            "para exportação de maracujá na base consultada."
+            "CONCLUSAO_SIMULADA_DO_MODELO: Sim, a cooperativa possui o certificado "
+            "INT-MARACUJA-999 válido até 2028 para exportação."
         ),
         "reference_date_used": "2026-10-30",
-        "source_ids": [],
-        "cited_sources": [],
+        "source_ids": ["fonte-inexistente"],
+        "cited_sources": [
+            {
+                "source_id": "fonte-inexistente",
+                "document_name": "cert_falso.txt",
+                "reference_label": "INT-MARACUJA-999",
+            }
+        ],
         "gaps_and_divergences": [],
-        "has_sufficient_data": False,
+        "has_sufficient_data": True,
     }
 
     runner = FakeConsultationRunner(simulated_output)
@@ -383,6 +463,10 @@ async def test_consultation_handles_empty_sources_without_inventing() -> None:
     assert result.has_sufficient_data is False
     assert result.source_ids == []
     assert result.cited_sources == []
+    assert result.answer == build_insufficient_sources_message("2026-10-30")
+    assert INSUFFICIENT_SOURCES_MESSAGE in result.answer
+    assert "CONCLUSAO_SIMULADA_DO_MODELO" not in result.answer
+    assert "INT-MARACUJA-999" not in result.answer
     assert any(g.kind == "lacuna" for g in result.gaps_and_divergences)
 
 
@@ -391,3 +475,37 @@ def test_consultation_schema_is_compatible_with_google_genai_transformer() -> No
 
     schema = t_schema(None, ConsultationResponse)
     assert schema is not None
+
+
+def test_consultation_schemas_public_and_split_module_imports() -> None:
+    from api.agents.consultation import reconciliation as recon_module
+    from api.agents.consultation import schemas as public_schemas
+    from api.agents.consultation.schemas.input import (
+        ConsultationInput as InputFromModule,
+    )
+    from api.agents.consultation.schemas.input import (
+        ConsultationSourceItem as SourceItemFromModule,
+    )
+    from api.agents.consultation.schemas.input import (
+        SourceKind as SourceKindFromModule,
+    )
+    from api.agents.consultation.schemas.response import (
+        CitedSource as CitedSourceFromModule,
+    )
+    from api.agents.consultation.schemas.response import (
+        ConsultationGapOrDivergence as GapFromModule,
+    )
+    from api.agents.consultation.schemas.response import (
+        ConsultationResponse as ResponseFromModule,
+    )
+
+    assert public_schemas.ConsultationInput is InputFromModule
+    assert public_schemas.ConsultationSourceItem is SourceItemFromModule
+    assert public_schemas.SourceKind is SourceKindFromModule
+    assert public_schemas.CitedSource is CitedSourceFromModule
+    assert public_schemas.ConsultationGapOrDivergence is GapFromModule
+    assert public_schemas.ConsultationResponse is ResponseFromModule
+    assert (
+        public_schemas.reconcile_consultation_sources
+        is recon_module.reconcile_consultation_sources
+    )

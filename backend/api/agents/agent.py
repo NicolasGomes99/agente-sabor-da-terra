@@ -1,21 +1,46 @@
-from datetime import UTC, date, datetime
-from enum import StrEnum
+"""Configuração do Agente Orquestrador e ponto de entrada da aplicação.
+
+Ponto de entrada oficial da aplicação (FastAPI / serviços de chat e fila de triagem):
+- Função assíncrona: `orchestrate_request` (importável via `api.agents.agent.orchestrate_request`
+  ou `api.agents.orchestrate_request`).
+- Contrato de entrada: `OrchestratorRequest` (`api.agents.schemas.OrchestratorRequest`).
+- Contrato de saída: `OrchestratorResponse` (`api.agents.schemas.OrchestratorResponse`),
+  cujo campo `result` entrega `TriageAnalysis` (fluxo `triage`) ou `ConsultationResponse`
+  (fluxo `consultation`).
+
+O objeto `root_agent` permanece exportado em `api.agents.agent` para inspeção e testes
+interativos via Google ADK CLI (`adk web` / `adk run`).
+"""
+
+from datetime import datetime
 from typing import Literal
 
 from google.adk import Agent, Runner
 from google.adk.agents.readonly_context import ReadonlyContext
-from google.genai import types
-from pydantic import BaseModel, Field, field_validator
 
 from .callbacks import UNTRUSTED_DATA_NOTICE, guard_untrusted_input_callback
 from .config import PERNAMBUCO_TIMEZONE, get_agent_model
 from .consultation import (
     ConsultationInput,
     ConsultationResponse,
-    ConsultationSourceItem,
     answer_document_consultation,
     create_consultation_agent,
 )
+from .routing import (
+    ROUTER_OUTPUT_KEY,
+    classify_intent_with_router_runner,
+    create_default_router_runner,
+    create_intent_router_agent,
+    infer_free_chat_flow,
+)
+from .schemas import (
+    ConversationTurn,
+    IntentRouteDecision,
+    OrchestratorFlow,
+    OrchestratorRequest,
+    OrchestratorResponse,
+)
+from .session import OrchestratorSessionStore, format_history_context
 from .triage import (
     TriageAnalysis,
     TriageInput,
@@ -24,7 +49,7 @@ from .triage import (
 )
 
 ORCHESTRATOR_APP_NAME = "sabor_da_terra_orchestrator"
-ROUTER_OUTPUT_KEY = "orchestrator_route"
+APPLICATION_ENTRYPOINT = "api.agents.agent:orchestrate_request"
 
 _ORCHESTRATOR_SYSTEM_PROMPT = f"""Você é o Agente Orquestrador do assistente interno da Cooperativa Agrícola Sabor da Terra.
 Sua função é coordenar o atendimento ao funcionário da cooperativa, mantendo o contexto da conversa atual e encaminhando cada solicitação ao agente especialista adequado:
@@ -39,167 +64,6 @@ Sua função é coordenar o atendimento ao funcionário da cooperativa, mantendo
 - Nunca misture dados ou histórico de outra sessão de conversa.
 - Responda sempre em português.
 """
-
-_TRIAGE_KEYWORDS: tuple[str, ...] = (
-    "analise esta mensagem",
-    "analisar mensagem",
-    "analise a mensagem",
-    "analise o pedido",
-    "analisar pedido",
-    "triar",
-    "triagem",
-    "mensagem recebida",
-    "pedido recebido",
-    "preciso pra",
-    "preciso urgente",
-    "manda 10kg",
-    "quero fechar",
-    "entrega terça",
-    "entrega sexta",
-)
-
-_CONSULTATION_KEYWORDS: tuple[str, ...] = (
-    "certificação",
-    "certificacao",
-    "certificado",
-    "orgânico",
-    "organico",
-    "orgânica",
-    "organica",
-    "vigente",
-    "validade",
-    "lote",
-    "lot-",
-    "rastreabilidade",
-    "origem",
-    "laudo",
-    "ficha técnica",
-    "ficha tecnica",
-    "adagro",
-)
-
-
-class OrchestratorFlow(StrEnum):
-    AUTO = "auto"
-    TRIAGE = "triage"
-    CONSULTATION = "consultation"
-
-
-class IntentRouteDecision(BaseModel):
-    target_flow: Literal["triage", "consultation"] = Field(
-        description="Fluxo especialista escolhido para atender à mensagem no chat livre.",
-    )
-    reason: str = Field(
-        min_length=1,
-        description="Justificativa curta em português para o encaminhamento.",
-    )
-
-
-class ConversationTurn(BaseModel):
-    role: Literal["user", "model"] = Field(
-        description="Autor do turno na sessão ('user' para funcionário, 'model' para assistente).",
-    )
-    content: str = Field(
-        min_length=1,
-        description="Texto registrado no turno da conversa.",
-    )
-    flow: Literal["triage", "consultation"] | None = Field(
-        default=None,
-        description="Fluxo executado neste turno, quando conhecido.",
-    )
-
-    @field_validator("content")
-    @classmethod
-    def _validate_content(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("content must not be blank.")
-        return stripped
-
-
-class OrchestratorRequest(BaseModel):
-    session_id: str = Field(
-        min_length=1,
-        description="Identificador único da sessão de conversa.",
-    )
-    message_text: str = Field(
-        min_length=1,
-        description="Mensagem enviada pelo funcionário no chat ou texto da tarefa da fila.",
-    )
-    flow: OrchestratorFlow = Field(
-        default=OrchestratorFlow.AUTO,
-        description=(
-            "Fluxo a executar: 'auto' no chat livre ou 'triage'/'consultation' "
-            "quando indicado pelo backend (ex.: fila de triagem)."
-        ),
-    )
-    received_at: datetime | date | str | None = Field(
-        default=None,
-        description="Data/hora de recebimento da mensagem ou data de referência da consulta.",
-    )
-    sender: str | None = Field(default=None)
-    buyer_name: str | None = Field(default=None)
-    channel: str | None = Field(default=None)
-    source_id: str | None = Field(default=None)
-    sources: list[ConsultationSourceItem] = Field(
-        default_factory=list,
-        description="Trechos e registros recuperados para consulta documental.",
-    )
-    history: list[ConversationTurn] = Field(
-        default_factory=list,
-        description="Histórico anterior da sessão aberta, quando retomada.",
-    )
-
-    @field_validator("session_id", "message_text")
-    @classmethod
-    def _strip_required(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("Field must not be blank.")
-        return stripped
-
-
-class OrchestratorResponse(BaseModel):
-    session_id: str = Field(
-        description="Identificador da sessão de conversa atendida.",
-    )
-    selected_flow: Literal["triage", "consultation"] = Field(
-        description="Fluxo especialista que processou a solicitação.",
-    )
-    selected_agent: Literal["triage_agent", "consultation_agent"] = Field(
-        description="Nome do agente especialista acionado.",
-    )
-    result: TriageAnalysis | ConsultationResponse = Field(
-        description="Resultado estruturado no formato definido para o fluxo selecionado.",
-    )
-    session_history: list[ConversationTurn] = Field(
-        default_factory=list,
-        description="Histórico atualizado da sessão atual.",
-    )
-
-
-class OrchestratorSessionStore:
-    """Mantém o histórico em memória isolado por session_id."""
-
-    def __init__(self) -> None:
-        self._history_by_session: dict[str, list[ConversationTurn]] = {}
-
-    def get_history(self, session_id: str) -> list[ConversationTurn]:
-        return list(self._history_by_session.get(session_id, []))
-
-    def seed_history(
-        self,
-        session_id: str,
-        turns: list[ConversationTurn],
-    ) -> list[ConversationTurn]:
-        existing = self._history_by_session.get(session_id)
-        if not existing and turns:
-            self._history_by_session[session_id] = list(turns)
-        return self.get_history(session_id)
-
-    def append_turn(self, session_id: str, turn: ConversationTurn) -> None:
-        turns = self._history_by_session.setdefault(session_id, [])
-        turns.append(turn)
 
 
 def build_orchestrator_instruction(context: ReadonlyContext) -> str:
@@ -226,131 +90,8 @@ def create_orchestrator_agent(model: str | None = None) -> Agent:
     )
 
 
-def create_intent_router_agent(model: str | None = None) -> Agent:
-    return Agent(
-        name="intent_router_agent",
-        model=model or get_agent_model(),
-        description="Classifica a intenção no chat livre entre triagem e consulta documental.",
-        instruction=(
-            "Classifique se a mensagem do funcionário no chat livre deve ser "
-            "atendida pelo fluxo 'triage' (análise/triagem de mensagem de pedido, "
-            "oferta, cotação ou esclarecimento de triagem) ou 'consultation' "
-            "(pergunta sobre certificações orgânicas, validade, lotes, "
-            "rastreabilidade ou documentos da cooperativa)."
-        ),
-        output_schema=IntentRouteDecision,
-        output_key=ROUTER_OUTPUT_KEY,
-        before_model_callback=guard_untrusted_input_callback,
-    )
-
-
 orchestrator_agent = create_orchestrator_agent()
 root_agent = orchestrator_agent
-
-
-def format_history_context(history: list[ConversationTurn]) -> str:
-    if not history:
-        return ""
-    lines = ["<historico_sessao_atual>"]
-    for idx, turn in enumerate(history, start=1):
-        author = "funcionario" if turn.role == "user" else "assistente"
-        flow_attr = f' fluxo="{turn.flow}"' if turn.flow else ""
-        lines.append(f'<turno ordem="{idx}" autor="{author}"{flow_attr}>')
-        lines.append(turn.content)
-        lines.append("</turno>")
-    lines.append("</historico_sessao_atual>")
-    return "\n".join(lines)
-
-
-def infer_free_chat_flow(
-    request: OrchestratorRequest,
-    history: list[ConversationTurn],
-) -> Literal["triage", "consultation"]:
-    """Determina o fluxo no chat livre considerando a mensagem, as fontes e o histórico da sessão."""
-    lowered = request.message_text.lower()
-
-    has_triage_signal = any(kw in lowered for kw in _TRIAGE_KEYWORDS)
-    has_consultation_signal = bool(request.sources) or any(
-        kw in lowered for kw in _CONSULTATION_KEYWORDS
-    )
-
-    if has_triage_signal and not has_consultation_signal:
-        return "triage"
-    if has_consultation_signal and not has_triage_signal:
-        return "consultation"
-    if has_triage_signal and has_consultation_signal:
-        if any(
-            marker in lowered
-            for marker in (
-                "analise esta mensagem",
-                "analisar mensagem",
-                "analise a mensagem",
-                "analise o pedido",
-                "triar",
-            )
-        ):
-            return "triage"
-        return "consultation"
-
-    for turn in reversed(history):
-        if turn.flow in {"triage", "consultation"}:
-            return turn.flow
-
-    if "?" in request.message_text:
-        return "consultation"
-    return "triage"
-
-
-async def classify_intent_with_router_runner(
-    request: OrchestratorRequest,
-    history: list[ConversationTurn],
-    router_runner: Runner,
-) -> Literal["triage", "consultation"]:
-    user_id = f"user-{request.session_id}"
-    session = await router_runner.session_service.create_session(
-        app_name=router_runner.app_name,
-        user_id=user_id,
-    )
-    history_block = format_history_context(history)
-    prompt_parts = [p for p in (history_block, request.message_text) if p]
-    message = types.Content(
-        role="user",
-        parts=[types.Part(text="\n\n".join(prompt_parts))],
-    )
-
-    final_text: str | None = None
-    async for event in router_runner.run_async(
-        user_id=user_id,
-        session_id=session.id,
-        new_message=message,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            texts = [
-                part.text
-                for part in event.content.parts
-                if getattr(part, "text", None)
-            ]
-            if texts:
-                final_text = "\n".join(texts).strip()
-
-    updated_session = await router_runner.session_service.get_session(
-        app_name=router_runner.app_name,
-        user_id=user_id,
-        session_id=session.id,
-    )
-    if updated_session and ROUTER_OUTPUT_KEY in updated_session.state:
-        raw = updated_session.state[ROUTER_OUTPUT_KEY]
-        decision = (
-            raw
-            if isinstance(raw, IntentRouteDecision)
-            else IntentRouteDecision.model_validate(raw)
-        )
-        return decision.target_flow
-    if final_text:
-        decision = IntentRouteDecision.model_validate_json(final_text)
-        return decision.target_flow
-
-    return infer_free_chat_flow(request, history)
 
 
 async def orchestrate_request(
@@ -362,6 +103,7 @@ async def orchestrate_request(
     router_runner: Runner | None = None,
     model: str | None = None,
 ) -> OrchestratorResponse:
+    """Ponto de entrada da aplicação para rotear e executar triagem ou consulta documental."""
     store = session_store or OrchestratorSessionStore()
     prior_history = store.seed_history(request.session_id, request.history)
 
@@ -369,46 +111,73 @@ async def orchestrate_request(
         selected_flow: Literal["triage", "consultation"] = "triage"
     elif request.flow == OrchestratorFlow.CONSULTATION:
         selected_flow = "consultation"
-    elif router_runner is not None:
+    else:
         selected_flow = await classify_intent_with_router_runner(
             request=request,
             history=prior_history,
             router_runner=router_runner,
+            model=model,
         )
-    else:
-        selected_flow = infer_free_chat_flow(request, prior_history)
 
     history_context = format_history_context(prior_history)
-    enriched_message = (
-        f"{history_context}\n\n{request.message_text}"
-        if history_context
-        else request.message_text
-    )
 
     if selected_flow == "triage":
-        received_ref = request.received_at or datetime.now(UTC)
+        triage_received_ref = store.resolve_triage_received_at(
+            request.session_id,
+            request.received_at,
+            prior_history,
+        )
         triage_input = TriageInput(
-            message_text=enriched_message,
-            received_at=received_ref,
+            message_text=request.message_text,
+            received_at=triage_received_ref,
             sender=request.sender,
             buyer_name=request.buyer_name,
             channel=request.channel,
             source_id=request.source_id,
+            conversation_history=history_context or None,
         )
-        result: TriageAnalysis | ConsultationResponse = await analyze_triage_message(
+        triage_result = await analyze_triage_message(
             triage_input,
             runner=triage_runner,
             model=model,
         )
+        prior_triage = store.get_last_triage_analysis(request.session_id)
+        if (
+            prior_triage is not None
+            and triage_result.extracted_data.delivery_date_start is None
+            and not triage_result.extracted_data.has_date_conflict
+            and prior_triage.extracted_data.delivery_date_start is not None
+        ):
+            merged_data = triage_result.model_dump()
+            merged_data["extracted_data"]["delivery_date_start"] = (
+                prior_triage.extracted_data.delivery_date_start
+            )
+            if (
+                merged_data["extracted_data"].get("delivery_date_end") is None
+                and prior_triage.extracted_data.delivery_date_end is not None
+            ):
+                merged_data["extracted_data"]["delivery_date_end"] = (
+                    prior_triage.extracted_data.delivery_date_end
+                )
+            triage_result = TriageAnalysis.model_validate(merged_data)
+
+        store.set_last_triage_analysis(request.session_id, triage_result)
+        result: TriageAnalysis | ConsultationResponse = triage_result
         selected_agent: Literal["triage_agent", "consultation_agent"] = "triage_agent"
-        assistant_summary = result.summary
+        assistant_summary = triage_result.summary
+        turn_received_at = triage_received_ref
     else:
         consultation_ref = (
             request.received_at
             or datetime.now(PERNAMBUCO_TIMEZONE).date().isoformat()
         )
+        enriched_question = (
+            f"{history_context}\n\n{request.message_text}"
+            if history_context
+            else request.message_text
+        )
         consultation_input = ConsultationInput(
-            question=enriched_message,
+            question=enriched_question,
             reference_date=consultation_ref,
             sources=request.sources,
         )
@@ -419,6 +188,7 @@ async def orchestrate_request(
         )
         selected_agent = "consultation_agent"
         assistant_summary = result.answer
+        turn_received_at = consultation_ref
 
     store.append_turn(
         request.session_id,
@@ -426,6 +196,7 @@ async def orchestrate_request(
             role="user",
             content=request.message_text,
             flow=selected_flow,
+            received_at=turn_received_at,
         ),
     )
     store.append_turn(
@@ -434,6 +205,7 @@ async def orchestrate_request(
             role="model",
             content=assistant_summary,
             flow=selected_flow,
+            received_at=turn_received_at,
         ),
     )
 
@@ -444,3 +216,26 @@ async def orchestrate_request(
         result=result,
         session_history=store.get_history(request.session_id),
     )
+
+
+__all__ = [
+    "APPLICATION_ENTRYPOINT",
+    "ORCHESTRATOR_APP_NAME",
+    "ROUTER_OUTPUT_KEY",
+    "ConversationTurn",
+    "IntentRouteDecision",
+    "OrchestratorFlow",
+    "OrchestratorRequest",
+    "OrchestratorResponse",
+    "OrchestratorSessionStore",
+    "build_orchestrator_instruction",
+    "classify_intent_with_router_runner",
+    "create_default_router_runner",
+    "create_intent_router_agent",
+    "create_orchestrator_agent",
+    "format_history_context",
+    "infer_free_chat_flow",
+    "orchestrate_request",
+    "orchestrator_agent",
+    "root_agent",
+]

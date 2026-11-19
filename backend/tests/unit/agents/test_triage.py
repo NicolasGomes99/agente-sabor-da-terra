@@ -199,7 +199,10 @@ def test_guard_untrusted_input_callback_blocks_blank_message() -> None:
     [
         (date(2026, 10, 28), date(2026, 10, 28), False, False, UrgencyLevel.URGENT),
         (date(2026, 10, 28), date(2026, 10, 29), False, False, UrgencyLevel.URGENT),
+        (date(2026, 10, 28), date(2026, 10, 30), False, False, UrgencyLevel.NORMAL),
         (date(2026, 10, 28), date(2026, 10, 31), False, False, UrgencyLevel.NORMAL),
+        (date(2026, 10, 28), date(2026, 10, 25), False, False, UrgencyLevel.UNDETERMINED),
+        (date(2026, 10, 28), date(2026, 10, 25), True, False, UrgencyLevel.URGENT),
         (date(2026, 10, 28), date(2026, 11, 4), True, False, UrgencyLevel.URGENT),
         (date(2026, 10, 28), None, False, False, UrgencyLevel.UNDETERMINED),
         (date(2026, 10, 28), date(2026, 11, 1), False, True, UrgencyLevel.UNDETERMINED),
@@ -220,6 +223,55 @@ def test_classify_urgency_follows_rf04_rules(
     )
     assert level == expected_level
     assert len(reason) > 10
+
+
+def test_classify_urgency_past_deadline_without_declared_urgency_is_undetermined() -> None:
+    level, reason = classify_urgency(
+        received_date=date(2026, 10, 28),
+        delivery_date_start=date(2026, 10, 25),
+        declared_urgency=False,
+        has_date_conflict=False,
+    )
+    assert level == UrgencyLevel.UNDETERMINED
+    assert "anterior" in reason.lower() or "inconsistência" in reason.lower()
+    assert "2026-10-25" in reason
+    assert "2026-10-28" in reason
+
+    analysis = TriageAnalysis(
+        summary="Pedido com data de entrega no passado sem urgência declarada.",
+        request_type=RequestType.ORDER,
+        declared_urgency=False,
+        urgency=UrgencyLevel.URGENT,
+        urgency_reason="Entrega imediata.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(delivery_date_start="2026-10-25"),
+    )
+    assert analysis.urgency == UrgencyLevel.UNDETERMINED
+    assert "anterior" in analysis.urgency_reason.lower()
+
+
+def test_classify_urgency_past_deadline_with_declared_urgency_remains_urgent() -> None:
+    level, reason = classify_urgency(
+        received_date=date(2026, 10, 28),
+        delivery_date_start=date(2026, 10, 25),
+        declared_urgency=True,
+        has_date_conflict=False,
+    )
+    assert level == UrgencyLevel.URGENT
+    assert "urgência declarada" in reason.lower()
+    assert "remetente" in reason.lower()
+
+    analysis = TriageAnalysis(
+        summary="Pedido urgente com data anterior ao recebimento.",
+        request_type=RequestType.ORDER,
+        declared_urgency=True,
+        urgency=UrgencyLevel.UNDETERMINED,
+        urgency_reason="Data inconsistente.",
+        received_date_reference="2026-10-28",
+        extracted_data=TriageExtractedData(delivery_date_start="2026-10-25"),
+    )
+    assert analysis.urgency == UrgencyLevel.URGENT
+    assert "remetente" in analysis.urgency_reason.lower()
 
 
 def test_triage_extracted_data_rejects_invalid_date_interval() -> None:
@@ -742,3 +794,44 @@ def test_triage_schema_is_compatible_with_google_genai_transformer() -> None:
 
     with pytest.raises(ValidationError, match="quantity must be greater than zero"):
         TriageExtractedItem(product="Queijo coalho", quantity=0)
+
+
+def test_triage_schemas_public_and_split_module_imports() -> None:
+    from api.agents.triage import schemas as public_schemas
+    from api.agents.triage.schemas.analysis import TriageAnalysis as AnalysisFromModule
+    from api.agents.triage.schemas.classification import (
+        PendingCategory as PendingFromModule,
+    )
+    from api.agents.triage.schemas.classification import (
+        RequestType as RequestFromModule,
+    )
+    from api.agents.triage.schemas.classification import (
+        TriagePendingItem as PendingItemFromModule,
+    )
+    from api.agents.triage.schemas.classification import (
+        UrgencyLevel as UrgencyFromModule,
+    )
+    from api.agents.triage.schemas.classification import (
+        classify_urgency as classify_from_module,
+    )
+    from api.agents.triage.schemas.extracted_data import (
+        TriageExtractedData as ExtractedDataFromModule,
+    )
+    from api.agents.triage.schemas.input import TriageInput as InputFromModule
+    from api.agents.triage.schemas.items import (
+        TriageExtractedItem as ItemFromModule,
+    )
+    from api.agents.triage.schemas.items import (
+        TriageRequirement as RequirementFromModule,
+    )
+
+    assert public_schemas.TriageAnalysis is AnalysisFromModule
+    assert public_schemas.TriageInput is InputFromModule
+    assert public_schemas.TriageExtractedItem is ItemFromModule
+    assert public_schemas.TriageRequirement is RequirementFromModule
+    assert public_schemas.TriageExtractedData is ExtractedDataFromModule
+    assert public_schemas.PendingCategory is PendingFromModule
+    assert public_schemas.RequestType is RequestFromModule
+    assert public_schemas.TriagePendingItem is PendingItemFromModule
+    assert public_schemas.UrgencyLevel is UrgencyFromModule
+    assert public_schemas.classify_urgency is classify_from_module
