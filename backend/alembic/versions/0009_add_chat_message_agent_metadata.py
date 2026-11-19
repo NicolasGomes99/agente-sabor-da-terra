@@ -1,0 +1,57 @@
+"""add conversational agent metadata columns to chat_messages
+
+Revision ID: 0009_chat_agent_metadata
+Revises: 8a63f9d204e1
+Create Date: 2026-11-19 18:35:00
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision: str = "0009_chat_agent_metadata"
+down_revision: str | Sequence[str] | None = "8a63f9d204e1"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "chat_messages",
+        sa.Column("flow", sa.String(length=32), nullable=True),
+    )
+    op.add_column(
+        "chat_messages",
+        sa.Column(
+            "reference_received_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+    )
+    op.add_column(
+        "chat_messages",
+        sa.Column("source_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "chat_messages",
+        sa.Column("context_metadata", sa.JSON(), nullable=True),
+    )
+    op.create_check_constraint(
+        "ck_chat_messages_flow",
+        "chat_messages",
+        "flow IS NULL OR flow IN ('triage', 'consultation')",
+    )
+
+
+def downgrade() -> None:
+    op.drop_constraint(
+        "ck_chat_messages_flow",
+        "chat_messages",
+        type_="check",
+    )
+    op.drop_column("chat_messages", "context_metadata")
+    op.drop_column("chat_messages", "source_id")
+    op.drop_column("chat_messages", "reference_received_at")
+    op.drop_column("chat_messages", "flow")

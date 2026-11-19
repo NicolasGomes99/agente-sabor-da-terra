@@ -21,6 +21,7 @@ from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
 from .repositories.solicitation import SolicitationRepository
 from .repositories.user import UserRepository
+from .services.agent_integration import AgentIntegrationService
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
 from .services.document import DocumentService
@@ -134,4 +135,10 @@ def get_solicitation_service(
     session: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> SolicitationService:
     return SolicitationService(SolicitationRepository(session))
+
+
+def get_agent_integration_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> AgentIntegrationService:
+    return AgentIntegrationService(ChatRepository(session))
 

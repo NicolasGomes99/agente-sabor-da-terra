@@ -4,7 +4,7 @@ from ..helpers.triage import (
     build_triage_session_title,
     format_triage_analysis,
 )
-from ..models.chat_message import ChatMessage, ChatMessageRole
+from ..models.chat_message import ChatMessage, ChatMessageFlow, ChatMessageRole
 from ..models.chat_session import ChatSession
 from ..models.solicitation import (
     Solicitation,
@@ -38,15 +38,36 @@ class SolicitationService:
         chat = await self.repository.create_session(
             build_triage_session_title(payload.input, analysis)
         )
+        origin_metadata: dict[str, str] = {}
+        if payload.input.sender:
+            origin_metadata["sender"] = payload.input.sender
+        if payload.input.buyer_name:
+            origin_metadata["buyer_name"] = payload.input.buyer_name
+        if payload.input.channel:
+            origin_metadata["channel"] = payload.input.channel
+
         await self.repository.add_message(
             chat.id,
             payload.input.message_text,
             role=ChatMessageRole.USER,
+            flow=ChatMessageFlow.TRIAGE,
+            reference_received_at=payload.input.received_at,
+            source_id=payload.input.source_id,
+            context_metadata=origin_metadata or None,
+        )
+        analysis_ref_received_at = (
+            payload.input.received_at
+            if payload.input.received_date.isoformat() == analysis.received_date_reference
+            else analysis.received_date_reference
         )
         await self.repository.add_message(
             chat.id,
             format_triage_analysis(analysis),
             role=ChatMessageRole.AGENT,
+            flow=ChatMessageFlow.TRIAGE,
+            reference_received_at=analysis_ref_received_at,
+            source_id=payload.input.source_id,
+            context_metadata={"triage_analysis": analysis.model_dump(mode="json")},
         )
 
         solicitation = Solicitation(
