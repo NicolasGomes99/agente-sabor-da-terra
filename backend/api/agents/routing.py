@@ -48,6 +48,13 @@ _CONSULTATION_KEYWORDS: tuple[str, ...] = (
     "ficha técnica",
     "ficha tecnica",
     "adagro",
+    "financeiro",
+    "financeira",
+    "resumo",
+    "vendas",
+    "pagamentos",
+    "pendências",
+    "pendencias",
 )
 
 
