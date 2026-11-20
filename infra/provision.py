@@ -163,12 +163,37 @@ def get_project(project_id: str) -> dict | None:
 
 
 def ensure_project(project_id: str) -> bool:
-    project = get_project(project_id)
+    projects = run_json(
+        [
+            "gcloud",
+            "projects",
+            "list",
+            f"--filter=projectId={project_id}",
+            "--format=json",
+        ]
+    )
 
-    if project is not None:
+    if not isinstance(projects, list):
+        raise InfraError("Invalid project list response.")
+
+    matches = [
+        project
+        for project in projects
+        if isinstance(project, dict)
+        and project.get("projectId") == project_id
+    ]
+
+    if matches:
+        project = get_project(project_id)
+
+        if project is None:
+            raise InfraError(
+                f"Could not verify existing project {project_id}."
+            )
+
         lifecycle = project.get("lifecycleState")
 
-        if lifecycle not in {"ACTIVE", None}:
+        if lifecycle != "ACTIVE":
             raise InfraError(
                 f"Project {project_id} exists with "
                 f"lifecycle state {lifecycle}."
@@ -178,7 +203,8 @@ def ensure_project(project_id: str) -> bool:
         return False
 
     confirm(
-        f"Create Google Cloud project {project_id}?"
+        f"Create Google Cloud project {project_id}? "
+        "The project was not found among accessible projects."
     )
 
     run_command(
@@ -473,9 +499,15 @@ def verify_project_budget(
             "Budget alert thresholds do not match."
         )
 
-    all_updates = budget.get("allUpdatesRule") or {}
+    notification_rules = (
+    budget.get("notificationsRule") or {},
+    budget.get("allUpdatesRule") or {},
+)
 
-    if all_updates.get("disableDefaultIamRecipients"):
+    if any(
+        rule.get("disableDefaultIamRecipients", False)
+        for rule in notification_rules
+    ):
         problems.append(
             "Default IAM budget notifications are disabled."
         )

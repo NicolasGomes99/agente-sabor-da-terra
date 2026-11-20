@@ -932,13 +932,13 @@ def destroy(config: dict) -> None:
             services,
         )
 
+        unlink_project_billing(
+            config
+        )
+
         delete_project_budgets(
             config,
             project_number,
-        )
-
-        unlink_project_billing(
-            config
         )
 
         delete_project(

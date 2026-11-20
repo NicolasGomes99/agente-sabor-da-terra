@@ -1293,8 +1293,8 @@ def test_destroy_respects_safe_operation_order(
         "delete_storage_bucket",
         "delete_artifact_repository",
         "verify_residual_resources",
-        "delete_project_budgets",
         "unlink_project_billing",
+        "delete_project_budgets",
         "delete_project",
     ]
 
@@ -1348,4 +1348,23 @@ def test_destroy_stops_when_residual_resources_exist(
 
     operations.delete_project_budgets.assert_not_called()
     operations.unlink_project_billing.assert_not_called()
+    operations.delete_project.assert_not_called()
+
+def test_destroy_preserves_budget_when_billing_unlink_fails(
+    config,
+    destroy_operations,
+):
+    operations = destroy_operations
+
+    operations.unlink_project_billing.side_effect = InfraError(
+        "Billing unlink failed."
+    )
+
+    with pytest.raises(
+        InfraError,
+        match="Billing unlink failed",
+    ):
+        destroy.destroy(config)
+
+    operations.delete_project_budgets.assert_not_called()
     operations.delete_project.assert_not_called()

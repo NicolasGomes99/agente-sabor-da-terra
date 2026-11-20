@@ -226,6 +226,12 @@ def test_project_lookup_rejects_permission_error(monkeypatch):
 def test_ensure_project_reuses_active_project(monkeypatch):
     monkeypatch.setattr(
         provision,
+        "run_json",
+        Mock(return_value=[{"projectId": PROJECT_ID}]),
+    )
+
+    monkeypatch.setattr(
+        provision,
         "get_project",
         Mock(
             return_value={
@@ -260,6 +266,11 @@ def test_ensure_project_rejects_inactive_project(
     lifecycle,
 ):
     monkeypatch.setattr(
+    provision,
+    "run_json",
+    Mock(return_value=[{"projectId": PROJECT_ID}]),
+)
+    monkeypatch.setattr(
         provision,
         "get_project",
         Mock(
@@ -277,6 +288,11 @@ def test_ensure_project_rejects_inactive_project(
 
 
 def test_ensure_project_creates_after_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        provision,
+        "run_json",
+        Mock(return_value=[]),
+    )
     monkeypatch.setattr(
         provision,
         "get_project",
@@ -606,8 +622,12 @@ def test_rejects_wrong_budget_thresholds(budget):
     assert problems
 
 
-def test_rejects_disabled_budget_notifications(budget):
-    budget["allUpdatesRule"] = {
+@pytest.mark.parametrize(
+    "field",
+    ["notificationsRule", "allUpdatesRule"],
+)
+def test_rejects_disabled_budget_notifications(budget, field):
+    budget[field] = {
         "disableDefaultIamRecipients": True,
     }
 
@@ -618,7 +638,10 @@ def test_rejects_disabled_budget_notifications(budget):
         "USD",
     )
 
-    assert problems
+    assert (
+        "Default IAM budget notifications are disabled."
+        in problems
+    )
 
 
 def test_ensure_project_budget_reuses_existing(
