@@ -260,3 +260,87 @@ def test_blank_product_name_remains_pending():
     assert draft.items[0].product_name is None
     assert draft.items[0].product_id is None
     assert "Confirmar qual produto foi solicitado." in draft.items[0].pending
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "com certificação orgânica",
+        "com laudo sanitário e nota fiscal",
+        "temperatura entre 2,5 e 4 graus",
+    ],
+)
+def test_item_fulfillment_requirements_are_added_to_order_conditions(condition):
+    draft = prepare_order_draft(
+        analysis(
+            extracted_data={
+                "items": [
+                    {
+                        "product": "Mel silvestre",
+                        "quantity": 20,
+                        "unit": "kg",
+                        "condition_text": condition,
+                    }
+                ]
+            }
+        )
+    )
+    assert draft.items[0].condition_text == condition
+    assert draft.items[0].conditional is False
+    assert "Exigência para 'Mel silvestre':" in draft.conditions
+    assert condition in draft.conditions
+
+
+@pytest.mark.parametrize(
+    "condition", ["se tiver", "Se tiver.", "se houver disponibilidade"]
+)
+def test_inclusion_conditions_do_not_become_fulfillment_requirements(condition):
+    draft = prepare_order_draft(
+        analysis(
+            extracted_data={
+                "items": [
+                    {
+                        "product": "Mel",
+                        "quantity": 5,
+                        "unit": "potes",
+                        "conditional": True,
+                        "condition_text": condition,
+                    }
+                ]
+            }
+        )
+    )
+    assert draft.items[0].conditional is True
+    assert draft.items[0].condition_text == condition
+    assert "Exigência" not in draft.conditions
+    assert condition not in draft.conditions
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "se tiver, com certificação orgânica",
+        "com certificação orgânica e se houver",
+    ],
+)
+def test_mixed_conditions_preserve_requirement_separately_from_inclusion(condition):
+    draft = prepare_order_draft(
+        analysis(
+            extracted_data={
+                "items": [
+                    {
+                        "product": "Mel",
+                        "quantity": 5,
+                        "unit": "potes",
+                        "conditional": True,
+                        "condition_text": condition,
+                    }
+                ]
+            }
+        )
+    )
+    assert draft.items[0].conditional is True
+    assert draft.items[0].condition_text == condition
+    assert "Exigência para 'Mel': com certificação orgânica" in draft.conditions
+    assert "se tiver" not in draft.conditions
+    assert "se houver" not in draft.conditions

@@ -18,7 +18,7 @@ O catálogo é uma sequência de `ProductResponse`, com UUID e nome reais fornec
 - A data única ou o intervalo vem exclusivamente do prazo de entrega. Prazos de resposta ou de documentos não se tornam datas de entrega.
 - Datas conflitantes ficam em aberto, com a referência original e a necessidade de confirmação.
 - Horário, local, pagamento, frequência, contrato, condições gerais e exigências são preservados em `conditions`.
-- Cada item preserva `conditional` e `condition_text`. Falta de descrição da condição gera uma pendência.
+- Cada item preserva `conditional` e `condition_text`. Exigências de atendimento presentes apenas em `condition_text`, como a certificação orgânica do mel, também entram em `conditions`, identificando o produto, para permanecerem no pedido confirmado pela #10. Expressões de inclusão como “se tiver” ficam no item e não são promovidas a exigências de atendimento. Falta de descrição da condição gera uma pendência.
 - Quantidades agregadas ou ambíguas ficam em aberto com a referência original e o esclarecimento necessário. Quantidades incompatíveis com a precisão do contrato também exigem revisão.
 - As pendências da análise são mantidas, junto das verificações de exigências e dos dados obrigatórios ausentes.
 
@@ -38,3 +38,5 @@ uv run ruff check .
 Os testes unitários usam o runner simulado da triagem nos caminhos de resposta final e de estado da sessão. Não exigem credenciais nem chamadas ao modelo real. Os testes de integração usam PostgreSQL e verificam o consumo do contrato pela #10 nos chats privado e de triagem.
 
 O cenário compartilhado preserva os dois itens do Mercado Bom Preço, o mel marcado como “se tiver”, a entrega pela manhã e o intervalo de 4 a 8 de novembro de 2026. Na revisão, o mel é retirado, a entrega muda para 6 de novembro e o pedido confirmado contém apenas 10 kg de queijo coalho. Casos adicionais cobrem pendências, catálogo ambíguo, precisão numérica e separação entre prazos de resposta e entrega.
+
+A regressão do `PED-2026-004` usa a mensagem original da Facepe e uma extração simulada focada no mel silvestre. A certificação orgânica aparece somente na condição do item extraído. Após gerar, persistir e confirmar o rascunho, o teste reabre o pedido no PostgreSQL e verifica a preservação dessa exigência, nos fluxos privado e de triagem.

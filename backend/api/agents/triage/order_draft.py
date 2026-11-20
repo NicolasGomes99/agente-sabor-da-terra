@@ -1,3 +1,4 @@
+import re
 from collections.abc import Sequence
 from decimal import Decimal
 
@@ -19,6 +20,23 @@ def _text(value: str | None) -> str | None:
 
 def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def _fulfillment_condition(condition: str) -> str:
+    inclusion = (
+        r"(?:se (?:tiver|houver)(?: disponibilidade)?|se disponível|"
+        r"caso (?:tenha|haja)(?: disponibilidade)?)"
+    )
+    clauses = re.split(r"\s*[,;](?!\d)\s*|\s+e\s+", condition, flags=re.IGNORECASE)
+    requirements = [
+        clause.strip()
+        for clause in clauses
+        if clause.strip()
+        and not re.fullmatch(
+            inclusion, " ".join(clause.strip(" .!?").split()), flags=re.IGNORECASE
+        )
+    ]
+    return condition if len(requirements) == len(clauses) else "; ".join(requirements)
 
 
 def prepare_order_draft(
@@ -116,6 +134,10 @@ def prepare_order_draft(
         if _text(extracted.clarification_needed):
             item_pending.append(extracted.clarification_needed)
         condition = _text(extracted.condition_text)
+        if condition:
+            fulfillment = _fulfillment_condition(condition)
+            if fulfillment:
+                conditions.append(f"Exigência para '{name}': {fulfillment}")
         if extracted.conditional and condition is None:
             item_pending.append(f"Confirmar a condição de inclusão de '{name}'.")
         items.append(

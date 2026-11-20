@@ -17,6 +17,14 @@ from ..models.chat_message import ChatMessageRole
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
+    @field_validator("content")
+    @classmethod
+    def validate_content_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Message content must not be blank.")
+        return stripped
+
 
 class CitationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
