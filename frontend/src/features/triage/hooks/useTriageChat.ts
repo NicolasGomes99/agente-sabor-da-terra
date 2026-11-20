@@ -25,6 +25,7 @@ type PendingTriageOperation = {
   operationId: string
   content: string
   persistedOnServer: boolean
+  status: 'processing' | 'failed'
 }
 
 export function useTriageChat(solicitationId: string | undefined) {
@@ -91,6 +92,25 @@ export function useTriageChat(solicitationId: string | undefined) {
               messages: sortMessages(session.messages),
             },
           })
+          if (!session.read_only && session.pending_operation) {
+            const hydrated: PendingTriageOperation = {
+              operationId: session.pending_operation.operation_id,
+              content: session.pending_operation.content,
+              persistedOnServer: true,
+              status: session.pending_operation.status,
+            }
+            pendingOperationRef.current = hydrated
+            setPendingOperation(hydrated)
+            setSendError(
+              session.pending_operation.status === 'failed'
+                ? 'Não foi possível obter resposta do assistente. Tente novamente.'
+                : null,
+            )
+          } else {
+            pendingOperationRef.current = null
+            setPendingOperation(null)
+            setSendError(null)
+          }
         }
       } catch (error) {
         if (controller.signal.aborted) return
@@ -137,6 +157,7 @@ export function useTriageChat(solicitationId: string | undefined) {
       persistedOnServer: existing?.operationId === operationId
         ? existing.persistedOnServer
         : false,
+      status: 'processing',
     }
     pendingOperationRef.current = currentOperation
     setPendingOperation(currentOperation)
@@ -219,6 +240,13 @@ export function useTriageChat(solicitationId: string | undefined) {
               }
             : current)
         } else {
+          if (existing && existing.operationId !== operationId) {
+            pendingOperationRef.current = existing
+            setPendingOperation(existing)
+          } else {
+            pendingOperationRef.current = null
+            setPendingOperation(null)
+          }
           setSendError(failure.detail ?? 'Não foi possível enviar a mensagem.')
         }
         throw error
@@ -231,6 +259,7 @@ export function useTriageChat(solicitationId: string | undefined) {
         operationId: resolvedOperationId,
         content,
         persistedOnServer: Boolean(persistedUserMsg) || currentOperation.persistedOnServer,
+        status: 'failed',
       }
       pendingOperationRef.current = updatedPending
       setPendingOperation(updatedPending)
@@ -279,12 +308,11 @@ export function useTriageChat(solicitationId: string | undefined) {
       return
     }
     const existing = pendingOperationRef.current
-    const reuseFailedDraft =
+    const reusePending =
       existing !== null &&
-      !existing.persistedOnServer &&
-      existing.content === content
-    const operationId = reuseFailedDraft ? existing.operationId : createOperationId()
-    await executeSend(solicitationId, content, operationId, reuseFailedDraft)
+      existing.content.trim() === content.trim()
+    const operationId = reusePending ? existing.operationId : createOperationId()
+    await executeSend(solicitationId, content, operationId, reusePending)
   }
 
   function handleRetrySend() {
@@ -381,6 +409,11 @@ export function useTriageChat(solicitationId: string | undefined) {
     detail,
     sending,
     delayed,
+    recoveredProcessing:
+      !sending &&
+      pendingOperation?.status === 'processing' &&
+      detail.status === 'ready' &&
+      !detail.data.read_only,
     finalizing,
     confirmingFinalize,
     sendError,

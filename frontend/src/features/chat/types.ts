@@ -28,8 +28,20 @@ export interface ChatMessage {
   citations: Citation[]
 }
 
+export interface RecoverableOperation {
+  operation_id: string
+  status: 'processing' | 'failed'
+  user_message_id: string
+  content: string
+  attempt: number
+  error_detail: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
+  pending_operation?: RecoverableOperation | null
 }
 
 export interface CreateMessagePayload {

@@ -10,7 +10,7 @@ from ..models.solicitation import (
     SolicitationType,
     SolicitationUrgency,
 )
-from .chat import MessageOut
+from .chat import MessageOut, RecoverableOperationOut
 
 
 class SolicitationCreate(BaseModel):
@@ -37,6 +37,7 @@ class SolicitationSessionOut(SolicitationOut):
     created_at: datetime
     read_only: bool
     messages: list[MessageOut]
+    pending_operation: RecoverableOperationOut | None = None
 
 
 class SolicitationTurnOut(BaseModel):

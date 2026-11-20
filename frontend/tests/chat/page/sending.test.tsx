@@ -308,4 +308,78 @@ describe('ChatPage sending', () => {
     expect(editor().value).toBe('')
     expect(send).not.toHaveBeenCalled()
   })
+
+  it('recovers a failed operation after reopening the conversation and retries without duplicating messages', async () => {
+    read.mockResolvedValueOnce({
+      ...detailA,
+      messages: [messageA, sentA],
+      pending_operation: {
+        operation_id: 'op-reopen-failed',
+        status: 'failed',
+        user_message_id: sentA.id,
+        content: sentA.content,
+        attempt: 1,
+        error_detail: 'Falha anterior do agente',
+        created_at: '2026-11-17T12:01:00Z',
+        updated_at: '2026-11-17T12:01:05Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...turnA,
+      operation_id: 'op-reopen-failed',
+    })
+
+    await renderReadyPage()
+
+    expect(screen.getByRole('alert').textContent).toContain('Tente novamente')
+    const retryButton = screen.getByRole('button', { name: 'Tentar novamente' })
+    fireEvent.click(retryButton)
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      sessionA.id,
+      { content: sentA.content, operation_id: 'op-reopen-failed', retry: true },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(replyA.content)).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(sentA.content)).toHaveLength(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('recovers an interrupted processing operation after reopening and reuses operation_id on resubmit', async () => {
+    read.mockResolvedValueOnce({
+      ...detailA,
+      messages: [messageA, sentA],
+      pending_operation: {
+        operation_id: 'op-reopen-processing',
+        status: 'processing',
+        user_message_id: sentA.id,
+        content: sentA.content,
+        attempt: 1,
+        error_detail: null,
+        created_at: '2026-11-17T12:01:00Z',
+        updated_at: '2026-11-17T12:01:00Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...turnA,
+      operation_id: 'op-reopen-processing',
+    })
+
+    await renderReadyPage()
+
+    expect(screen.getByRole('status').textContent).toContain('processamento')
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeTruthy()
+
+    // Mesmo se o funcionário reenviar o mesmo texto pelo campo, reutiliza operation_id original
+    submit(sentA.content)
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      sessionA.id,
+      { content: sentA.content, operation_id: 'op-reopen-processing', retry: true },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(replyA.content)).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(sentA.content)).toHaveLength(1)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
 })

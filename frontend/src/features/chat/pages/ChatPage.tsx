@@ -28,6 +28,7 @@ type PendingOperation = {
   operationId: string
   content: string
   persistedOnServer: boolean
+  status: 'processing' | 'failed'
 }
 
 type ConversationState = {
@@ -147,12 +148,35 @@ export function ChatPage() {
       if (!isCurrentRead()) return
 
       // A read may have started before an in-flight send was committed.
-      updateConversation(sessionId, {
+      const patch: Partial<ConversationState> = {
         messages: sortMessages(uniqueById([
           ...session.messages,
           ...(confirmedMessages.current.get(sessionId) ?? []),
         ])),
-      })
+      }
+      if (!pendingSends.current.has(sessionId)) {
+        const serverPending = session.pending_operation
+        const localPending = pendingOperationsRef.current.get(sessionId)
+        if (serverPending) {
+          const hydrated: PendingOperation = {
+            operationId: serverPending.operation_id,
+            content: serverPending.content,
+            persistedOnServer: true,
+            status: serverPending.status,
+          }
+          pendingOperationsRef.current.set(sessionId, hydrated)
+          patch.pendingOperation = hydrated
+          patch.sendError =
+            serverPending.status === 'failed'
+              ? 'Não foi possível obter resposta do assistente. Tente novamente.'
+              : null
+        } else if (localPending?.persistedOnServer) {
+          pendingOperationsRef.current.delete(sessionId)
+          patch.pendingOperation = null
+          patch.sendError = null
+        }
+      }
+      updateConversation(sessionId, patch)
     } catch (error) {
       if (!isCurrentRead() || expireSession(error, lifetime)) return
       updateConversation(sessionId, {
@@ -258,6 +282,7 @@ export function ChatPage() {
       persistedOnServer: existingPending?.operationId === operationId
         ? existingPending.persistedOnServer
         : false,
+      status: 'processing',
     }
     pendingOperationsRef.current.set(sessionId, currentOperation)
 
@@ -318,12 +343,32 @@ export function ChatPage() {
       if (expireSession(error, lifetime)) return
 
       const failure = extractExecutionFailure(error)
+      if (error instanceof ApiError && error.status === 409) {
+        if (existingPending && existingPending.operationId !== operationId) {
+          pendingOperationsRef.current.set(sessionId, existingPending)
+          updateConversation(sessionId, {
+            sendError: failure.detail ?? 'Não foi possível enviar a mensagem.',
+            pendingOperation: existingPending,
+            delayed: false,
+          })
+        } else {
+          pendingOperationsRef.current.delete(sessionId)
+          updateConversation(sessionId, {
+            sendError: failure.detail ?? 'Não foi possível enviar a mensagem.',
+            pendingOperation: null,
+            delayed: false,
+          })
+        }
+        throw error
+      }
+
       const persistedUserMsg = failure.userMessage
       const resolvedOperationId = failure.operationId ?? operationId
       const updatedPending: PendingOperation = {
         operationId: resolvedOperationId,
         content,
         persistedOnServer: Boolean(persistedUserMsg) || currentOperation.persistedOnServer,
+        status: 'failed',
       }
       pendingOperationsRef.current.set(sessionId, updatedPending)
 
@@ -376,12 +421,11 @@ export function ChatPage() {
     const sessionId = activeSessionId
     if (!sessionId) return
     const existing = pendingOperationsRef.current.get(sessionId)
-    const reuseFailedDraft =
+    const reusePending =
       existing !== undefined &&
-      !existing.persistedOnServer &&
-      existing.content === content
-    const operationId = reuseFailedDraft ? existing.operationId : createOperationId()
-    await executeSend(sessionId, content, operationId, reuseFailedDraft)
+      existing.content.trim() === content.trim()
+    const operationId = reusePending ? existing.operationId : createOperationId()
+    await executeSend(sessionId, content, operationId, reusePending)
   }
 
   function handleRetryActiveSession() {
@@ -434,6 +478,10 @@ export function ChatPage() {
           <ConversationStatusBanner
             sending={conversation.sending}
             delayed={conversation.delayed}
+            recoveredProcessing={
+              !conversation.sending &&
+              conversation.pendingOperation?.status === 'processing'
+            }
             error={conversation.sendError}
             canRetry={conversation.pendingOperation !== null}
             onRetry={handleRetryActiveSession}

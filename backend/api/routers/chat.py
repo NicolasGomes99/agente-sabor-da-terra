@@ -14,6 +14,7 @@ from ..schemas.chat import (
     ChatTurnOut,
     MessageCreate,
     MessageOut,
+    RecoverableOperationOut,
     SessionDetail,
     SessionOut,
 )
@@ -58,6 +59,7 @@ async def get_session(
     session_id: UUID,
     user: CurrentUser,
     service: Service,
+    conversation_service: Conversation,
 ) -> SessionDetail:
     try:
         chat, messages = await service.get_session_with_messages(
@@ -66,9 +68,18 @@ async def get_session(
     except SessionNotFoundError as error:
         raise _not_found() from error
 
+    recoverable = await conversation_service.get_recoverable_operation(
+        chat.id,
+        messages=messages,
+    )
     return SessionDetail(
         **SessionOut.model_validate(chat).model_dump(),
-        messages=[MessageOut.model_validate(m) for m in messages]
+        messages=[MessageOut.model_validate(m) for m in messages],
+        pending_operation=(
+            RecoverableOperationOut.from_operation(recoverable[0], recoverable[1])
+            if recoverable is not None
+            else None
+        ),
     )
 
 @router.post(

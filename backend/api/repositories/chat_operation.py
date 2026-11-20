@@ -50,6 +50,7 @@ class ChatOperationRepository:
         session_id: UUID,
         *,
         exclude_operation_key: str | None = None,
+        lock: bool = False,
     ) -> ChatOperation | None:
         statement = (
             select(ChatOperation)
@@ -64,7 +65,36 @@ class ChatOperationRepository:
             statement = statement.where(
                 ChatOperation.operation_key != exclude_operation_key
             )
+        if lock:
+            statement = statement.with_for_update()
         return await self.session.scalar(statement)
+
+    async def get_latest_for_session(
+        self,
+        session_id: UUID,
+    ) -> ChatOperation | None:
+        statement = (
+            select(ChatOperation)
+            .where(ChatOperation.session_id == session_id)
+            .order_by(ChatOperation.session_generation.desc())
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+        return await self.session.scalar(statement)
+
+    async def get_recoverable_for_session(
+        self,
+        session_id: UUID,
+    ) -> ChatOperation | None:
+        latest = await self.get_latest_for_session(session_id)
+        if latest is None:
+            return None
+        if latest.status in {
+            ChatOperationStatus.PROCESSING.value,
+            ChatOperationStatus.FAILED.value,
+        }:
+            return latest
+        return None
 
     async def get_latest_generation(self, session_id: UUID) -> int:
         latest = await self.session.scalar(

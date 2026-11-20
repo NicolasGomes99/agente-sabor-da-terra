@@ -1,6 +1,7 @@
 interface ConversationStatusBannerProps {
   sending: boolean
   delayed: boolean
+  recoveredProcessing?: boolean
   error: string | null
   canRetry: boolean
   onRetry?: () => void
@@ -9,6 +10,7 @@ interface ConversationStatusBannerProps {
 export function ConversationStatusBanner({
   sending,
   delayed,
+  recoveredProcessing = false,
   error,
   canRetry,
   onRetry,
@@ -35,6 +37,28 @@ export function ConversationStatusBanner({
             Tentar novamente
           </button>
         )}
+      </div>
+    )
+  }
+
+  if (recoveredProcessing && canRetry && onRetry) {
+    return (
+      <div
+        className="conversation-status delayed"
+        role="status"
+        aria-live="polite"
+      >
+        <p>
+          A última mensagem ainda está em processamento ou foi interrompida. Você pode tentar novamente para concluir a resposta.
+        </p>
+
+        <button
+          type="button"
+          className="conversation-retry-button"
+          onClick={onRetry}
+        >
+          Tentar novamente
+        </button>
       </div>
     )
   }

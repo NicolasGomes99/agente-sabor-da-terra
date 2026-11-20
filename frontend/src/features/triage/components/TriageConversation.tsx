@@ -8,6 +8,7 @@ interface TriageConversationProps {
   session: SolicitationSession
   sending: boolean
   delayed: boolean
+  recoveredProcessing?: boolean
   sendError: string | null
   canRetrySend: boolean
   clearInputCount: number
@@ -19,6 +20,7 @@ export function TriageConversation({
   session,
   sending,
   delayed,
+  recoveredProcessing = false,
   sendError,
   canRetrySend,
   clearInputCount,
@@ -37,6 +39,7 @@ export function TriageConversation({
       <ConversationStatusBanner
         sending={sending}
         delayed={delayed}
+        recoveredProcessing={recoveredProcessing}
         error={sendError}
         canRetry={canRetrySend}
         onRetry={onRetrySend}

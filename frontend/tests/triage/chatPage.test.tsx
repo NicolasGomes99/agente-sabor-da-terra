@@ -403,6 +403,91 @@ describe('TriageChatPage', () => {
     expect(within(screen.getByRole('log')).getByText(session.messages[0].content)).toBeTruthy()
   })
 
+  it('recovers a failed triage operation after reopening and retries without duplicating messages', async () => {
+    read.mockResolvedValueOnce({
+      ...session,
+      messages: [...session.messages, clarification],
+      pending_operation: {
+        operation_id: 'op-triage-reopen-fail',
+        status: 'failed',
+        user_message_id: clarification.id,
+        content: clarification.content,
+        attempt: 1,
+        error_detail: 'Falha anterior',
+        created_at: '2026-11-17T12:02:00Z',
+        updated_at: '2026-11-17T12:02:05Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...clarificationTurn,
+      operation_id: 'op-triage-reopen-fail',
+    })
+
+    renderPage()
+    await screen.findByRole('heading', { name: session.summary })
+
+    expect(screen.getByRole('alert').textContent).toContain('Tente novamente')
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      session.id,
+      {
+        content: clarification.content,
+        operation_id: 'op-triage-reopen-fail',
+        retry: true,
+      },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(updatedAssistantMessage.content)).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: clarificationTurn.solicitation.summary }),
+    ).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('recovers an interrupted processing triage operation after reopening and reuses operation_id', async () => {
+    read.mockResolvedValueOnce({
+      ...session,
+      messages: [...session.messages, clarification],
+      pending_operation: {
+        operation_id: 'op-triage-reopen-proc',
+        status: 'processing',
+        user_message_id: clarification.id,
+        content: clarification.content,
+        attempt: 1,
+        error_detail: null,
+        created_at: '2026-11-17T12:02:00Z',
+        updated_at: '2026-11-17T12:02:00Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...clarificationTurn,
+      operation_id: 'op-triage-reopen-proc',
+    })
+
+    renderPage()
+    await screen.findByRole('heading', { name: session.summary })
+
+    expect(screen.getByRole('status').textContent).toContain('processamento')
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeTruthy()
+
+    // Reenviar o mesmo conteúdo reutiliza o operation_id recuperado sem duplicar
+    submit(clarification.content)
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      session.id,
+      {
+        content: clarification.content,
+        operation_id: 'op-triage-reopen-proc',
+        retry: true,
+      },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(updatedAssistantMessage.content)).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
+  })
+
   it('shows a not-found state and returns to the queue', async () => {
     read.mockRejectedValueOnce(new ApiError(404, null))
     renderPage('unknown')

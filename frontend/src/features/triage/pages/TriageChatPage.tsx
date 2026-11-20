@@ -33,6 +33,7 @@ function TriageChatPageContent({
     detail,
     sending,
     delayed,
+    recoveredProcessing,
     finalizing,
     confirmingFinalize,
     sendError,
@@ -110,6 +111,7 @@ function TriageChatPageContent({
           session={session}
           sending={sending}
           delayed={delayed}
+          recoveredProcessing={recoveredProcessing}
           sendError={sendError}
           canRetrySend={canRetrySend}
           clearInputCount={clearInputCount}

@@ -11,7 +11,8 @@ from pydantic import (
     model_validator,
 )
 
-from ..models.chat_message import ChatMessageRole
+from ..models.chat_message import ChatMessage, ChatMessageRole
+from ..models.chat_operation import ChatOperation, ChatOperationStatus
 
 
 class MessageCreate(BaseModel):
@@ -115,8 +116,42 @@ class SessionOut(BaseModel):
     created_at: datetime
 
 
+class RecoverableOperationOut(BaseModel):
+    operation_id: str
+    status: Literal["processing", "failed"]
+    user_message_id: UUID
+    content: str
+    attempt: int
+    error_detail: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_operation(
+        cls,
+        operation: ChatOperation,
+        user_message: ChatMessage,
+    ) -> "RecoverableOperationOut":
+        status_value: Literal["processing", "failed"] = (
+            "processing"
+            if operation.status == ChatOperationStatus.PROCESSING.value
+            else "failed"
+        )
+        return cls(
+            operation_id=operation.operation_key,
+            status=status_value,
+            user_message_id=user_message.id,
+            content=user_message.content,
+            attempt=operation.attempt,
+            error_detail=operation.error_detail,
+            created_at=operation.created_at,
+            updated_at=operation.updated_at,
+        )
+
+
 class SessionDetail(SessionOut):
     messages: list[MessageOut]
+    pending_operation: RecoverableOperationOut | None = None
 
 
 class ChatTurnOut(BaseModel):

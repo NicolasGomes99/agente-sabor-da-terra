@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../chat/types'
+import type { ChatMessage, RecoverableOperation } from '../chat/types'
 
 export type SolicitationStatus = 'recebida' | 'em_analise' | 'finalizada'
 
@@ -25,6 +25,7 @@ export interface SolicitationSession extends Solicitation {
   created_at: string
   read_only: boolean
   messages: ChatMessage[]
+  pending_operation?: RecoverableOperation | null
 }
 
 export interface SolicitationMessagePayload {

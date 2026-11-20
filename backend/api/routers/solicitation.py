@@ -9,7 +9,7 @@ from ..dependencies import (
     get_current_user,
     get_solicitation_service,
 )
-from ..schemas.chat import MessageCreate, MessageOut
+from ..schemas.chat import MessageCreate, MessageOut, RecoverableOperationOut
 from ..schemas.solicitation import (
     SolicitationCreate,
     SolicitationOut,
@@ -88,6 +88,7 @@ async def get_solicitation(
 async def open_solicitation_session(
     solicitation_id: UUID,
     service: Service,
+    conversation_service: Conversation,
 ) -> SolicitationSessionOut:
     try:
         solicitation, chat, messages, read_only = (
@@ -96,12 +97,25 @@ async def open_solicitation_session(
     except SolicitationNotFoundError as error:
         raise _not_found() from error
 
+    recoverable = (
+        None
+        if read_only
+        else await conversation_service.get_recoverable_operation(
+            chat.id,
+            messages=messages,
+        )
+    )
     return SolicitationSessionOut(
         **SolicitationOut.model_validate(solicitation).model_dump(),
         title=chat.title,
         created_at=chat.created_at,
         read_only=read_only,
         messages=[MessageOut.model_validate(message) for message in messages],
+        pending_operation=(
+            RecoverableOperationOut.from_operation(recoverable[0], recoverable[1])
+            if recoverable is not None
+            else None
+        ),
     )
 
 

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,6 +54,7 @@ from api.models.solicitation import (
 )
 from api.models.user import User
 from api.repositories.chat import ChatRepository
+from api.repositories.chat_operation import ChatOperationRepository
 from api.repositories.document import DocumentRepository
 from api.repositories.solicitation import SolicitationRepository
 from api.repositories.user import UserRepository
@@ -65,6 +66,7 @@ from api.schemas.solicitation import SolicitationCreate
 from api.services.auth import AuthService
 from api.services.conversation import (
     ConversationExecutionError,
+    ConversationOperationInProgressError,
     ConversationService,
     ConversationSolicitationFinishedError,
     InMemoryTriageOriginMetadataProvider,
@@ -1001,3 +1003,671 @@ async def test_persisted_document_source_provider_returns_empty_when_db_has_no_c
     )
     assert result.sources == []
     assert result.financial_records is None
+
+
+@pytest.mark.asyncio
+async def test_triage_lock_order_and_concurrent_retry_during_phase3_commit_without_deadlock(
+    real_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Correção 1 do review da #51:
+    # - _lock_and_validate_target, _phase3_commit_result e _mark_failed_if_current
+    #   devem sempre adquirir locks na ordem canônica solicitação -> sessão.
+    # - Uma nova tentativa concorrente durante a fase 3 de persistência de uma
+    #   tentativa anterior não pode gerar deadlock no PostgreSQL.
+    async with real_session_factory() as setup_session:
+        sol_service = SolicitationService(SolicitationRepository(setup_session))
+        solicitation = await sol_service.create_from_analysis(
+            SolicitationCreate.model_validate(_ped_2026_003_payload())
+        )
+        await sol_service.open_session(solicitation.id)
+        solicitation_id = solicitation.id
+        session_id = solicitation.session_id
+
+    try:
+        # 1) Verifica ordem explícita dos locks em fase 1, fase 3 e marcação de falha
+        recorded_orders: list[tuple[str, list[str]]] = []
+
+        async with real_session_factory() as order_session:
+            order_log: list[str] = []
+            service = ConversationService(
+                order_session,
+                orchestrator=lambda req: asyncio.sleep(
+                    0,
+                    result=OrchestratorResponse(
+                        session_id=req.session_id,
+                        selected_flow="triage",
+                        selected_agent="triage_agent",
+                        result=TriageAnalysis.model_validate(
+                            {
+                                "summary": "Resumo validando ordem de locks",
+                                "request_type": "pedido",
+                                "urgency": "normal",
+                                "urgency_reason": "Teste de ordem de locks",
+                                "received_date_reference": "2026-10-28",
+                                "extracted_data": {},
+                                "pending_items": [],
+                            }
+                        ),
+                    ),
+                ),
+            )
+            orig_get_sol = service.solicitation_repository.get_by_id
+            orig_get_triage_session = service.solicitation_repository.get_session
+            orig_get_chat_by_id = service.chat_repository.get_session_by_id
+
+            async def tracked_get_sol(sol_id: UUID, *, lock: bool = False) -> Any:
+                if lock:
+                    order_log.append("solicitation")
+                return await orig_get_sol(sol_id, lock=lock)
+
+            async def tracked_get_triage_session(
+                sess_id: UUID, *, lock: bool = False
+            ) -> Any:
+                if lock:
+                    order_log.append("session")
+                return await orig_get_triage_session(sess_id, lock=lock)
+
+            async def tracked_get_chat_by_id(
+                sess_id: UUID, *, lock: bool = False
+            ) -> Any:
+                if lock:
+                    order_log.append("session")
+                return await orig_get_chat_by_id(sess_id, lock=lock)
+
+            service.solicitation_repository.get_by_id = tracked_get_sol  # type: ignore[method-assign]
+            service.solicitation_repository.get_session = tracked_get_triage_session  # type: ignore[method-assign]
+            service.chat_repository.get_session_by_id = tracked_get_chat_by_id  # type: ignore[method-assign]
+
+            await service.send_triage_chat_message(
+                solicitation_id=solicitation_id,
+                content="Verificação de ordem de locks",
+                operation_id="op-lock-order-ok",
+            )
+            # Fase 1: solicitation -> session; Fase 3: solicitation -> session
+            assert order_log == ["solicitation", "session", "solicitation", "session"]
+            recorded_orders.append(("success", list(order_log)))
+
+            order_log.clear()
+
+            async def failing_orchestrator(_req: OrchestratorRequest) -> OrchestratorResponse:
+                raise RuntimeError("Falha simulada para validar lock order em _mark_failed_if_current")
+
+            service.orchestrator = failing_orchestrator
+            with pytest.raises(ConversationExecutionError):
+                await service.send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Verificação de ordem de locks na falha",
+                    operation_id="op-lock-order-fail",
+                )
+            # Fase 1: solicitation -> session; _mark_failed_if_current: solicitation -> session
+            assert order_log == ["solicitation", "session", "solicitation", "session"]
+            recorded_orders.append(("failure", list(order_log)))
+
+        assert len(recorded_orders) == 2
+
+        # 2) Corrida concorrente real no PostgreSQL:
+        # tentativa 1 entrando em _phase3_commit_result ao mesmo tempo que
+        # tentativa 2 (retry=True) entra em _phase1_start_or_reuse.
+        async def run_race_round(round_idx: int) -> None:
+            op_key = f"op-lock-race-{round_idx}"
+            attempt1_ready_for_phase3 = asyncio.Event()
+            release_phase3_and_retry = asyncio.Event()
+            calls = 0
+
+            async def race_orchestrator(
+                request: OrchestratorRequest,
+            ) -> OrchestratorResponse:
+                nonlocal calls
+                calls += 1
+                current = calls
+                if current == 1:
+                    attempt1_ready_for_phase3.set()
+                    await release_phase3_and_retry.wait()
+                return OrchestratorResponse(
+                    session_id=request.session_id,
+                    selected_flow="triage",
+                    selected_agent="triage_agent",
+                    result=TriageAnalysis.model_validate(
+                        {
+                            "summary": f"Resumo rodada {round_idx} tentativa {current}",
+                            "request_type": "pedido",
+                            "urgency": "normal",
+                            "urgency_reason": f"Tentativa {current}",
+                            "received_date_reference": "2026-10-28",
+                            "extracted_data": {},
+                            "pending_items": [],
+                        }
+                    ),
+                )
+
+            async def run_attempt(retry_flag: bool) -> Any:
+                async with real_session_factory() as sess:
+                    svc = ConversationService(sess, orchestrator=race_orchestrator)
+                    if retry_flag:
+                        await release_phase3_and_retry.wait()
+                    return await svc.send_triage_chat_message(
+                        solicitation_id=solicitation_id,
+                        content=f"Esclarecimento concorrente {round_idx}",
+                        operation_id=op_key,
+                        retry=retry_flag,
+                    )
+
+            t1 = asyncio.create_task(run_attempt(False))
+            await asyncio.wait_for(attempt1_ready_for_phase3.wait(), timeout=5.0)
+            t2 = asyncio.create_task(run_attempt(True))
+            await asyncio.sleep(0.02)
+            # Libera simultaneamente fase 3 da tentativa 1 e fase 1 da tentativa 2
+            release_phase3_and_retry.set()
+
+            results = await asyncio.gather(t1, t2, return_exceptions=True)
+            # Nenhum deadlock (nem erro inesperado de banco); ou ambas retornam o turno
+            # concluído (se t1 commitou antes de t2 ler o status COMPLETED) ou t1 é descartada
+            # como stale e t2 vence.
+            for res in results:
+                if isinstance(res, BaseException):
+                    assert isinstance(res, StaleOperationResultError), (
+                        f"Exceção inesperada na corrida de locks: {res!r}"
+                    )
+            assert any(not isinstance(r, BaseException) for r in results)
+
+            async with real_session_factory() as check_session:
+                op = await ChatOperationRepository(check_session).get_by_key(
+                    session_id, op_key
+                )
+                assert op is not None
+                assert op.status == ChatOperationStatus.COMPLETED.value
+                assert op.assistant_message_id is not None
+
+        for round_idx in range(3):
+            await run_race_round(round_idx)
+    finally:
+        async with real_session_factory() as cleanup_session:
+            await cleanup_session.execute(
+                delete(Solicitation).where(Solicitation.id == solicitation_id)
+            )
+            await cleanup_session.execute(
+                delete(ChatSession).where(ChatSession.id == session_id)
+            )
+            await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_distinct_operations_old_retry_never_invalidates_or_overwrites_newer_operation(
+    real_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Correção 2 do review da #51 (RNF10 - operações distintas):
+    # 1) Nova tentativa de op-1 após op-2 concluída é rejeitada e não sobrescreve o cartão.
+    # 2) Nova tentativa de op-1 enquanto op-2 está em processamento é rejeitada e NÃO invalida op-2.
+    # 3) Operação ativa recente bloqueia o início de uma operação distinta.
+    # 4) Operação obsoleta (>60s) pode ser substituída por operação distinta, descartando resultado atrasado.
+    async with real_session_factory() as setup_session:
+        sol_service = SolicitationService(SolicitationRepository(setup_session))
+        solicitation = await sol_service.create_from_analysis(
+            SolicitationCreate.model_validate(_ped_2026_003_payload())
+        )
+        await sol_service.open_session(solicitation.id)
+        solicitation_id = solicitation.id
+        session_id = solicitation.session_id
+
+    try:
+        # Passo A: op-1 falha (session_generation = 1)
+        async def fail_once(_request: OrchestratorRequest) -> OrchestratorResponse:
+            raise RuntimeError("Timeout simulado na op-1")
+
+        async with real_session_factory() as s1:
+            with pytest.raises(ConversationExecutionError):
+                await ConversationService(
+                    s1, orchestrator=fail_once
+                ).send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Primeiro esclarecimento que falhou",
+                    operation_id="op-distinct-1",
+                )
+
+        # Passo B: op-2 inicia e fica em processamento (session_generation = 2).
+        # Enquanto op-2 está ativa, tentar reexecutar op-1 (retry=True) deve ser rejeitado
+        # SEM invalidar op-2!
+        op2_started = asyncio.Event()
+        release_op2 = asyncio.Event()
+        op1_retry_called = False
+
+        async def op2_orchestrator(
+            request: OrchestratorRequest,
+        ) -> OrchestratorResponse:
+            op2_started.set()
+            await release_op2.wait()
+            return OrchestratorResponse(
+                session_id=request.session_id,
+                selected_flow="triage",
+                selected_agent="triage_agent",
+                result=TriageAnalysis.model_validate(
+                    {
+                        "summary": "Resumo mais recente da op-2",
+                        "request_type": "pedido",
+                        "urgency": "normal",
+                        "urgency_reason": "Esclarecimento mais recente",
+                        "received_date_reference": "2026-10-28",
+                        "extracted_data": {"delivery_date_start": "2026-11-10"},
+                        "pending_items": [],
+                    }
+                ),
+            )
+
+        async def run_op2() -> Any:
+            async with real_session_factory() as s2:
+                return await ConversationService(
+                    s2, orchestrator=op2_orchestrator
+                ).send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Segundo esclarecimento mais recente",
+                    operation_id="op-distinct-2",
+                )
+
+        op2_task = asyncio.create_task(run_op2())
+        await asyncio.wait_for(op2_started.wait(), timeout=5.0)
+
+        async def unexpected_op1_orchestrator(
+            request: OrchestratorRequest,
+        ) -> OrchestratorResponse:
+            nonlocal op1_retry_called
+            op1_retry_called = True
+            return OrchestratorResponse(
+                session_id=request.session_id,
+                selected_flow="triage",
+                selected_agent="triage_agent",
+                result=TriageAnalysis.model_validate(
+                    {
+                        "summary": "SOBRESCRITA INDEVIDA DA OP-1",
+                        "request_type": "consulta",
+                        "urgency": "urgente",
+                        "urgency_reason": "Indevida",
+                        "received_date_reference": "2026-10-28",
+                        "extracted_data": {},
+                        "pending_items": [],
+                    }
+                ),
+            )
+
+        # Retry de op-1 durante op-2 em andamento -> rejeitado com StaleOperationResultError
+        async with real_session_factory() as s_retry_during:
+            with pytest.raises(StaleOperationResultError):
+                await ConversationService(
+                    s_retry_during, orchestrator=unexpected_op1_orchestrator
+                ).send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Primeiro esclarecimento que falhou",
+                    operation_id="op-distinct-1",
+                    retry=True,
+                )
+
+        # Operação distinta nova (op-3) enquanto op-2 está ativa (<60s) -> bloqueada
+        async with real_session_factory() as s_blocked:
+            with pytest.raises(ConversationOperationInProgressError):
+                await ConversationService(
+                    s_blocked, orchestrator=unexpected_op1_orchestrator
+                ).send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Terceira mensagem bloqueada enquanto op-2 processa",
+                    operation_id="op-distinct-blocked",
+                )
+
+        # Libera op-2: ela NÃO foi invalidada e conclui normalmente!
+        release_op2.set()
+        op2_result = await op2_task
+        assert op2_result.operation_id == "op-distinct-2"
+        assert op2_result.solicitation is not None
+        assert op2_result.solicitation.summary == "Resumo mais recente da op-2"
+        assert op2_result.solicitation.urgency == SolicitationUrgency.NORMAL
+
+        # Passo C: Após op-2 concluída, tentar repetir op-1 (retry=True ou retry=False)
+        # continua rejeitado e preserva o cartão e o histórico da op-2.
+        for retry_flag in (True, False):
+            async with real_session_factory() as s_retry_after:
+                with pytest.raises(StaleOperationResultError):
+                    await ConversationService(
+                        s_retry_after, orchestrator=unexpected_op1_orchestrator
+                    ).send_triage_chat_message(
+                        solicitation_id=solicitation_id,
+                        content="Primeiro esclarecimento que falhou",
+                        operation_id="op-distinct-1",
+                        retry=retry_flag,
+                    )
+
+        assert op1_retry_called is False
+
+        # Passo D: op-3 fica obsoleta (>60s), op-4 inicia e conclui; resultado atrasado de op-3 é descartado.
+        op3_started = asyncio.Event()
+        release_op3 = asyncio.Event()
+
+        async def slow_op3_orchestrator(
+            request: OrchestratorRequest,
+        ) -> OrchestratorResponse:
+            op3_started.set()
+            await release_op3.wait()
+            return OrchestratorResponse(
+                session_id=request.session_id,
+                selected_flow="triage",
+                selected_agent="triage_agent",
+                result=TriageAnalysis.model_validate(
+                    {
+                        "summary": "Resultado atrasado da op-3",
+                        "request_type": "oferta",
+                        "urgency": "urgente",
+                        "urgency_reason": "Atrasada",
+                        "received_date_reference": "2026-10-28",
+                        "extracted_data": {},
+                        "pending_items": [],
+                    }
+                ),
+            )
+
+        async def op4_orchestrator(
+            request: OrchestratorRequest,
+        ) -> OrchestratorResponse:
+            return OrchestratorResponse(
+                session_id=request.session_id,
+                selected_flow="triage",
+                selected_agent="triage_agent",
+                result=TriageAnalysis.model_validate(
+                    {
+                        "summary": "Resumo final vigente da op-4",
+                        "request_type": "pedido",
+                        "urgency": "normal",
+                        "urgency_reason": "Vigente",
+                        "received_date_reference": "2026-10-28",
+                        "extracted_data": {"delivery_date_start": "2026-11-10"},
+                        "pending_items": [],
+                    }
+                ),
+            )
+
+        async def run_op3() -> Any:
+            async with real_session_factory() as s3:
+                return await ConversationService(
+                    s3, orchestrator=slow_op3_orchestrator
+                ).send_triage_chat_message(
+                    solicitation_id=solicitation_id,
+                    content="Mensagem da op-3 que vai ficar lenta",
+                    operation_id="op-distinct-3",
+                )
+
+        op3_task = asyncio.create_task(run_op3())
+        await asyncio.wait_for(op3_started.wait(), timeout=5.0)
+
+        # Envelhece updated_at de op-3 para simular operação parada há >60s
+        async with real_session_factory() as age_session:
+            op3 = await ChatOperationRepository(age_session).get_by_key(
+                session_id, "op-distinct-3", lock=True
+            )
+            assert op3 is not None
+            op3.updated_at = datetime.now(UTC) - timedelta(seconds=120)
+            await age_session.commit()
+
+        # op-4 substitui op-3 obsoleta e conclui
+        async with real_session_factory() as s4:
+            op4_result = await ConversationService(
+                s4, orchestrator=op4_orchestrator
+            ).send_triage_chat_message(
+                solicitation_id=solicitation_id,
+                content="Mensagem mais recente da op-4",
+                operation_id="op-distinct-4",
+            )
+        assert op4_result.solicitation is not None
+        assert op4_result.solicitation.summary == "Resumo final vigente da op-4"
+
+        # Resultado atrasado da op-3 é descartado sem alterar o cartão nem gravar resposta
+        release_op3.set()
+        with pytest.raises(StaleOperationResultError):
+            await op3_task
+
+        async with real_session_factory() as verify_session:
+            sol = await SolicitationRepository(verify_session).get_by_id(solicitation_id)
+            assert sol is not None
+            assert sol.summary == "Resumo final vigente da op-4"
+            assert sol.request_type == SolicitationType.ORDER
+            assert sol.urgency == SolicitationUrgency.NORMAL
+
+            msgs = await ChatRepository(verify_session).list_messages(session_id)
+            assistant_contents = [
+                m.content for m in msgs if m.role == ChatMessageRole.AGENT
+            ]
+            assert not any("SOBRESCRITA INDEVIDA" in c for c in assistant_contents)
+            assert not any("Resultado atrasado da op-3" in c for c in assistant_contents)
+            assert any("Resumo final vigente da op-4" in c for c in assistant_contents)
+    finally:
+        async with real_session_factory() as cleanup_session:
+            await cleanup_session.execute(
+                delete(Solicitation).where(Solicitation.id == solicitation_id)
+            )
+            await cleanup_session.execute(
+                delete(ChatSession).where(ChatSession.id == session_id)
+            )
+            await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_recoverable_operations_exposed_on_reopen_and_retried_without_duplication(
+    db_session: AsyncSession,
+    api_client: httpx.AsyncClient,
+) -> None:
+    # Correção 3 do review da #51:
+    # Ao reabrir uma conversa no chat livre ou na triagem após falha ou processamento
+    # interrompido, o endpoint retorna pending_operation com o operation_id e o conteúdo
+    # originais, permitindo nova tentativa sem duplicar mensagens ou respostas.
+    _, headers = await _create_user_headers(db_session)
+
+    # --- 1) Chat livre: operação com falha recuperada ao reabrir ---
+    free_session_id = (
+        await api_client.post("/chat/sessions", headers=headers)
+    ).json()["id"]
+
+    should_fail = True
+
+    async def toggle_free_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        if should_fail:
+            raise RuntimeError("Erro temporário do modelo")
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="consultation",
+            selected_agent="consultation_agent",
+            result=ConsultationResponse(
+                answer="Resposta recuperada após reabrir a conversa.",
+                reference_date_used="2026-11-19",
+                source_ids=[],
+                cited_sources=[],
+                gaps_and_divergences=[],
+                has_sufficient_data=True,
+            ),
+        )
+
+    app.dependency_overrides[get_agent_orchestrator] = lambda: toggle_free_orchestrator
+
+    failed_resp = await api_client.post(
+        f"/chat/sessions/{free_session_id}/messages",
+        headers=headers,
+        json={
+            "content": "Qual a validade da certificação orgânica?",
+            "operation_id": "op-recover-free-fail",
+        },
+    )
+    assert failed_resp.status_code == 502
+
+    # Reabre a conversa: pending_operation deve expor a operação falhada
+    reopened_free = await api_client.get(
+        f"/chat/sessions/{free_session_id}",
+        headers=headers,
+    )
+    assert reopened_free.status_code == 200
+    reopened_free_body = reopened_free.json()
+    assert len(reopened_free_body["messages"]) == 1
+    pending = reopened_free_body["pending_operation"]
+    assert pending is not None
+    assert pending["operation_id"] == "op-recover-free-fail"
+    assert pending["status"] == "failed"
+    assert pending["content"] == "Qual a validade da certificação orgânica?"
+    assert pending["user_message_id"] == reopened_free_body["messages"][0]["id"]
+
+    # Tenta novamente usando os dados recuperados ao reabrir -> sem duplicar
+    should_fail = False
+    retry_free = await api_client.post(
+        f"/chat/sessions/{free_session_id}/messages",
+        headers=headers,
+        json={
+            "content": pending["content"],
+            "operation_id": pending["operation_id"],
+            "retry": True,
+        },
+    )
+    assert retry_free.status_code == 201, retry_free.text
+    retry_free_body = retry_free.json()
+    assert retry_free_body["user_message"]["id"] == pending["user_message_id"]
+
+    after_free = (
+        await api_client.get(f"/chat/sessions/{free_session_id}", headers=headers)
+    ).json()
+    assert after_free["pending_operation"] is None
+    assert len(after_free["messages"]) == 2
+
+    # --- 2) Chat livre: operação em processamento interrompido recuperada ao reabrir ---
+    interrupted_msg = await ChatRepository(db_session).add_message(
+        UUID(free_session_id),
+        "Mensagem interrompida no reload",
+        role=ChatMessageRole.USER,
+    )
+    await ChatOperationRepository(db_session).create(
+        session_id=UUID(free_session_id),
+        operation_key="op-recover-free-proc",
+        user_message_id=interrupted_msg.id,
+        session_generation=2,
+    )
+    await db_session.commit()
+
+    reopened_proc = (
+        await api_client.get(f"/chat/sessions/{free_session_id}", headers=headers)
+    ).json()
+    proc_pending = reopened_proc["pending_operation"]
+    assert proc_pending is not None
+    assert proc_pending["operation_id"] == "op-recover-free-proc"
+    assert proc_pending["status"] == "processing"
+    assert proc_pending["content"] == "Mensagem interrompida no reload"
+    assert proc_pending["user_message_id"] == str(interrupted_msg.id)
+
+    retry_proc = await api_client.post(
+        f"/chat/sessions/{free_session_id}/messages",
+        headers=headers,
+        json={
+            "content": proc_pending["content"],
+            "operation_id": proc_pending["operation_id"],
+            "retry": True,
+        },
+    )
+    assert retry_proc.status_code == 201
+    assert retry_proc.json()["user_message"]["id"] == str(interrupted_msg.id)
+    after_proc = (
+        await api_client.get(f"/chat/sessions/{free_session_id}", headers=headers)
+    ).json()
+    assert after_proc["pending_operation"] is None
+    assert len(after_proc["messages"]) == 4
+
+    # --- 3) Chat da triagem: operação com falha recuperada ao reabrir + limpa após finalizar ---
+    sol_resp = await api_client.post(
+        "/solicitations",
+        headers=headers,
+        json=_ped_2026_003_payload(),
+    )
+    assert sol_resp.status_code == 201
+    solicitation_id = sol_resp.json()["id"]
+
+    triage_fail = True
+
+    async def toggle_triage_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        if triage_fail:
+            raise RuntimeError("Falha na triagem")
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="triage",
+            selected_agent="triage_agent",
+            result=TriageAnalysis.model_validate(
+                {
+                    "summary": "Resumo atualizado após recuperação da triagem",
+                    "request_type": "pedido",
+                    "urgency": "normal",
+                    "urgency_reason": "Esclarecido após nova tentativa",
+                    "received_date_reference": "2026-10-28",
+                    "extracted_data": {},
+                    "pending_items": [],
+                }
+            ),
+        )
+
+    app.dependency_overrides[get_agent_orchestrator] = lambda: toggle_triage_orchestrator
+
+    triage_502 = await api_client.post(
+        f"/solicitations/{solicitation_id}/messages",
+        headers=headers,
+        json={
+            "content": "Pode entregar na próxima segunda-feira",
+            "operation_id": "op-recover-triage-1",
+        },
+    )
+    assert triage_502.status_code == 502
+
+    reopened_triage = (
+        await api_client.post(f"/solicitations/{solicitation_id}/open", headers=headers)
+    ).json()
+    triage_pending = reopened_triage["pending_operation"]
+    assert triage_pending is not None
+    assert triage_pending["operation_id"] == "op-recover-triage-1"
+    assert triage_pending["status"] == "failed"
+    assert triage_pending["content"] == "Pode entregar na próxima segunda-feira"
+    assert len(reopened_triage["messages"]) == 3
+
+    triage_fail = False
+    retry_triage = await api_client.post(
+        f"/solicitations/{solicitation_id}/messages",
+        headers=headers,
+        json={
+            "content": triage_pending["content"],
+            "operation_id": triage_pending["operation_id"],
+            "retry": True,
+        },
+    )
+    assert retry_triage.status_code == 201
+    assert retry_triage.json()["user_message"]["id"] == triage_pending["user_message_id"]
+    assert (
+        retry_triage.json()["solicitation"]["summary"]
+        == "Resumo atualizado após recuperação da triagem"
+    )
+
+    after_triage = (
+        await api_client.post(f"/solicitations/{solicitation_id}/open", headers=headers)
+    ).json()
+    assert after_triage["pending_operation"] is None
+    assert len(after_triage["messages"]) == 4
+
+    # Solicitação finalizada não expõe operação recuperável mesmo que exista falha anterior
+    triage_fail = True
+    assert (
+        await api_client.post(
+            f"/solicitations/{solicitation_id}/messages",
+            headers=headers,
+            json={
+                "content": "Mensagem que falha antes de finalizar",
+                "operation_id": "op-recover-triage-final",
+            },
+        )
+    ).status_code == 502
+    assert (
+        await api_client.post(
+            f"/solicitations/{solicitation_id}/finalize", headers=headers
+        )
+    ).status_code == 200
+    finalized_open = (
+        await api_client.post(f"/solicitations/{solicitation_id}/open", headers=headers)
+    ).json()
+    assert finalized_open["read_only"] is True
+    assert finalized_open["pending_operation"] is None

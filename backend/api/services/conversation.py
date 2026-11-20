@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol, runtime_checkable
@@ -234,6 +234,32 @@ class ConversationService:
         self.stale_processing_seconds = stale_processing_seconds
         self.in_flight_wait_seconds = in_flight_wait_seconds
 
+    async def get_recoverable_operation(
+        self,
+        session_id: UUID,
+        *,
+        messages: Sequence[ChatMessage] | None = None,
+    ) -> tuple[ChatOperation, ChatMessage] | None:
+        operation = await self.operation_repository.get_recoverable_for_session(
+            session_id
+        )
+        if operation is None:
+            return None
+
+        user_message: ChatMessage | None = None
+        if messages is not None:
+            user_message = next(
+                (msg for msg in messages if msg.id == operation.user_message_id),
+                None,
+            )
+        if user_message is None:
+            user_message = await self.chat_repository.get_message_with_citations(
+                operation.user_message_id
+            )
+        if user_message is None:
+            return None
+        return operation, user_message
+
     async def send_free_chat_message(
         self,
         *,
@@ -355,6 +381,9 @@ class ConversationService:
                 operation_key,
                 lock=True,
             )
+            latest_generation = await self.operation_repository.get_latest_generation(
+                session_id
+            )
 
             if existing is not None:
                 existing_user_msg = await self.chat_repository.get_message_with_citations(
@@ -387,6 +416,31 @@ class ConversationService:
                     await self.session.commit()
                     return result, None, None
 
+                if existing.session_generation < latest_generation:
+                    await self.session.rollback()
+                    raise StaleOperationResultError(
+                        "Esta operação foi substituída por uma interação mais recente "
+                        "na conversa e não pode mais ser reexecutada."
+                    )
+
+                other_active = await self.operation_repository.get_active_processing(
+                    session_id,
+                    exclude_operation_key=operation_key,
+                    lock=True,
+                )
+                if other_active is not None:
+                    if not self._is_stale_processing(other_active):
+                        await self.session.rollback()
+                        raise ConversationOperationInProgressError(
+                            "Já existe uma resposta em processamento nesta conversa. "
+                            "Aguarde a conclusão antes de tentar novamente."
+                        )
+                    other_active.status = ChatOperationStatus.FAILED.value
+                    other_active.error_detail = (
+                        "Substituída por operação mais recente."
+                    )
+                    other_active.updated_at = datetime.now(UTC)
+
                 if (
                     existing.status == ChatOperationStatus.PROCESSING.value
                     and not retry
@@ -394,13 +448,9 @@ class ConversationService:
                     wait_target_session_id = session_id
                     await self.session.commit()
                 else:
-                    # Nova tentativa reutiliza a mensagem original do usuário (sem duplicar)
-                    next_generation = (
-                        await self.operation_repository.get_latest_generation(session_id)
-                        + 1
-                    )
+                    # Nova tentativa da operação vigente: reutiliza a mensagem original
+                    # e preserva session_generation, incrementando apenas attempt.
                     existing.attempt += 1
-                    existing.session_generation = next_generation
                     existing.status = ChatOperationStatus.PROCESSING.value
                     existing.error_detail = None
                     existing.updated_at = datetime.now(UTC)
@@ -424,23 +474,27 @@ class ConversationService:
                 other_active = await self.operation_repository.get_active_processing(
                     session_id,
                     exclude_operation_key=operation_key,
+                    lock=True,
                 )
-                if other_active is not None and not self._is_stale_processing(other_active):
-                    await self.session.rollback()
-                    raise ConversationOperationInProgressError(
-                        "Já existe uma resposta em processamento nesta conversa. "
-                        "Aguarde a conclusão antes de enviar outra mensagem."
+                if other_active is not None:
+                    if not self._is_stale_processing(other_active):
+                        await self.session.rollback()
+                        raise ConversationOperationInProgressError(
+                            "Já existe uma resposta em processamento nesta conversa. "
+                            "Aguarde a conclusão antes de enviar outra mensagem."
+                        )
+                    other_active.status = ChatOperationStatus.FAILED.value
+                    other_active.error_detail = (
+                        "Substituída por operação mais recente."
                     )
+                    other_active.updated_at = datetime.now(UTC)
 
                 user_message = await self.chat_repository.add_message(
                     session_id,
                     normalized_content,
                     role=ChatMessageRole.USER,
                 )
-                next_generation = (
-                    await self.operation_repository.get_latest_generation(session_id)
-                    + 1
-                )
+                next_generation = latest_generation + 1
                 operation = await self.operation_repository.create(
                     session_id=session_id,
                     operation_key=operation_key,
@@ -597,6 +651,18 @@ class ConversationService:
                 await self.session.commit()
                 return result
 
+            latest_generation = await self.operation_repository.get_latest_generation(
+                session_id
+            )
+            if (
+                operation.status != ChatOperationStatus.COMPLETED.value
+                and operation.session_generation < latest_generation
+            ):
+                await self.session.commit()
+                raise StaleOperationResultError(
+                    "Esta operação foi substituída por uma interação mais recente na conversa."
+                )
+
             if operation.status == ChatOperationStatus.FAILED.value:
                 await self.session.commit()
                 assert user_msg is not None
@@ -665,14 +731,8 @@ class ConversationService:
         retrieved: RetrievedDocumentSources,
     ) -> ConversationTurnResult:
         try:
-            chat = await self.chat_repository.get_session_by_id(
-                started.session_id,
-                lock=True,
-            )
-            if chat is None:
-                await self.session.rollback()
-                raise ConversationSessionNotFoundError("Sessão não encontrada.")
-
+            # Ordem canônica de locks: solicitação -> sessão -> operação
+            # (compatível com _lock_and_validate_target e OrderDraftService #10).
             solicitation: Solicitation | None = None
             if started.solicitation_id is not None:
                 solicitation = await self.solicitation_repository.get_by_id(
@@ -684,6 +744,14 @@ class ConversationService:
                     raise ConversationSessionNotFoundError(
                         "Solicitação não encontrada."
                     )
+
+            chat = await self.chat_repository.get_session_by_id(
+                started.session_id,
+                lock=True,
+            )
+            if chat is None:
+                await self.session.rollback()
+                raise ConversationSessionNotFoundError("Sessão não encontrada.")
 
             operation = await self.operation_repository.get_by_id(
                 started.operation_id,
@@ -803,6 +871,14 @@ class ConversationService:
     ) -> bool:
         """Marca a operação como failed apenas se esta tentativa ainda for a vigente. Retorna True se stale."""
         try:
+            if started.solicitation_id is not None:
+                solicitation = await self.solicitation_repository.get_by_id(
+                    started.solicitation_id,
+                    lock=True,
+                )
+                if solicitation is None:
+                    await self.session.rollback()
+                    return True
             chat = await self.chat_repository.get_session_by_id(
                 started.session_id,
                 lock=True,
