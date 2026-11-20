@@ -11,7 +11,7 @@ from typing import Literal
 from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ...helpers.units import IncompatibleUnitError, convert_quantity
 from ..callbacks import guard_untrusted_input_callback
@@ -63,10 +63,23 @@ class TriageEvidence(BaseModel):
     product: str | None = None
     valid_from: date | None = None
     valid_until: date | None = None
-    amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    amount: float | None = Field(
+        default=None,
+        allow_inf_nan=False,
+        description="Quantidade estritamente positiva, quando informada.",
+    )
+
     unit: str | None = None
     period: Literal["dia", "semana", "mês", "ano"] | None = None
     scope: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("A quantidade deve ser positiva.")
+        return value
 
 
 class TriageEvidenceResult(BaseModel):
