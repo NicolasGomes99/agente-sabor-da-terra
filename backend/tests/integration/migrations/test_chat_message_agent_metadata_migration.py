@@ -13,7 +13,7 @@ from testcontainers.community.postgres import PostgresContainer
 from alembic import command
 
 AGENT_METADATA_REVISION = "0010_chat_agent_metadata"
-PARENT_REVISION = "0009_create_lots"
+PARENT_REVISION = "e3b0b6c06f7c"
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -118,7 +118,10 @@ def test_chat_message_agent_metadata_migration_preserves_legacy_rows(
 
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == AGENT_METADATA_REVISION
+    assert AGENT_METADATA_REVISION in {
+        entry.revision
+        for entry in script.walk_revisions(base="base", head=heads[0])
+    }
 
     revision = script.get_revision(AGENT_METADATA_REVISION)
     assert revision is not None
