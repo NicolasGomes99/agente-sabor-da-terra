@@ -12,12 +12,16 @@ import provision
 from common import InfraError
 
 
-def completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
+def completed(
+    stdout: str = "",
+    returncode: int = 0,
+    stderr: str = "",
+) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(
         args=[],
         returncode=returncode,
         stdout=stdout,
-        stderr="",
+        stderr=stderr,
     )
 
 
@@ -61,7 +65,7 @@ def test_get_service_account_returns_none_when_missing(
     monkeypatch.setattr(
         provision,
         "run_command",
-        Mock(return_value=completed(returncode=1)),
+        Mock(return_value=completed(stderr="NOT_FOUND: service account not found", returncode=1)),
     )
 
     assert provision.get_service_account(
@@ -121,7 +125,7 @@ def test_get_secret_returns_none_when_missing(
     monkeypatch.setattr(
         provision,
         "run_command",
-        Mock(return_value=completed(returncode=1)),
+        Mock(return_value=completed(stderr="NOT_FOUND: secret not found", returncode=1)),
     )
 
     assert provision.get_secret("test-sabor-da-terra", "jwt-secret-key") is None
@@ -132,6 +136,11 @@ def test_ensure_secret_preserves_existing(monkeypatch: pytest.MonkeyPatch) -> No
         provision,
         "get_secret",
         Mock(return_value={"name": "existing"}),
+    )
+    monkeypatch.setattr(
+        provision,
+        "get_enabled_secret_versions",
+        Mock(return_value=[{"state": "ENABLED"}]),
     )
     run_command = Mock(return_value=completed())
     monkeypatch.setattr(provision, "run_command", run_command)
@@ -214,8 +223,14 @@ def test_configure_stage_5_vertex(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(provision, "ensure_secret", Mock(return_value=False))
     bind_project_role = Mock()
     bind_secret_accessor = Mock()
+    bind_service_account_user = Mock()
     monkeypatch.setattr(provision, "bind_project_role", bind_project_role)
     monkeypatch.setattr(provision, "bind_secret_accessor", bind_secret_accessor)
+    monkeypatch.setattr(
+        provision,
+        "bind_service_account_user",
+        bind_service_account_user,
+    )
     monkeypatch.setattr(provision.secrets, "token_urlsafe", Mock(return_value="generated"))
 
     config = {
@@ -230,7 +245,13 @@ def test_configure_stage_5_vertex(monkeypatch: pytest.MonkeyPatch) -> None:
     roles = [call.args[2] for call in bind_project_role.call_args_list]
     assert "roles/aiplatform.user" in roles
     assert "roles/cloudsql.client" in roles
-    assert "roles/cloudtasks.enqueuer" in roles
+    assert "roles/cloudtasks.enqueuer" not in roles
+    assert "roles/iam.serviceAccountUser" not in roles
+    bind_service_account_user.assert_called_once_with(
+        "test-sabor-da-terra",
+        emails["tasks"],
+        emails["api"],
+    )
     secret_names = [call.args[1] for call in bind_secret_accessor.call_args_list]
     assert "database-url" in secret_names
     assert "jwt-secret-key" in secret_names
@@ -257,6 +278,7 @@ def test_configure_stage_5_developer_requires_key(
     monkeypatch.setattr(provision, "get_secret", Mock(return_value=None))
     monkeypatch.setattr(provision, "bind_project_role", Mock())
     monkeypatch.setattr(provision, "bind_secret_accessor", Mock())
+    monkeypatch.setattr(provision, "bind_service_account_user", Mock())
     monkeypatch.setattr(provision.secrets, "token_urlsafe", Mock(return_value="generated"))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(provision, "getpass", Mock(return_value=""))
@@ -292,6 +314,7 @@ def test_configure_stage_5_preserves_gemini_secret(
     monkeypatch.setattr(provision, "bind_project_role", Mock())
     bind_secret_accessor = Mock()
     monkeypatch.setattr(provision, "bind_secret_accessor", bind_secret_accessor)
+    monkeypatch.setattr(provision, "bind_service_account_user", Mock())
     monkeypatch.setattr(provision.secrets, "token_urlsafe", Mock(return_value="generated"))
 
     provision.configure_stage_5(

@@ -12,12 +12,16 @@ import provision
 from common import InfraError
 
 
-def completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
+def completed(
+    stdout: str = "",
+    returncode: int = 0,
+    stderr: str = "",
+) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(
         args=[],
         returncode=returncode,
         stdout=stdout,
-        stderr="",
+        stderr=stderr,
     )
 
 
@@ -119,8 +123,9 @@ def test_ensure_billing_account_reuses_matching_link(
         provision,
         "run_json",
         Mock(
-            return_value=[
-                {"name": "billingAccounts/XXXXXX-XXXXXX-XXXXXX", "open": True}
+            side_effect=[
+                [{"name": "billingAccounts/XXXXXX-XXXXXX-XXXXXX", "open": True}],
+                {"currencyCode": "USD"},
             ]
         ),
     )
@@ -139,10 +144,10 @@ def test_ensure_billing_account_reuses_matching_link(
         ),
     )
 
-    provision.ensure_billing_account(
+    assert provision.ensure_billing_account(
         "test-sabor-da-terra",
         "XXXXXX-XXXXXX-XXXXXX",
-    )
+    ) == "USD"
 
 
 def test_ensure_billing_account_rejects_different_link(
@@ -152,8 +157,9 @@ def test_ensure_billing_account_rejects_different_link(
         provision,
         "run_json",
         Mock(
-            return_value=[
-                {"name": "billingAccounts/XXXXXX-XXXXXX-XXXXXX", "open": True}
+            side_effect=[
+                [{"name": "billingAccounts/XXXXXX-XXXXXX-XXXXXX", "open": True}],
+                {"currencyCode": "USD"},
             ]
         ),
     )
@@ -179,6 +185,27 @@ def test_ensure_billing_account_rejects_different_link(
         )
 
 
+def test_ensure_billing_account_rejects_non_usd_currency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provision,
+        "run_json",
+        Mock(
+            side_effect=[
+                [{"name": "billingAccounts/XXXXXX-XXXXXX-XXXXXX", "open": True}],
+                {"currencyCode": "BRL"},
+            ]
+        ),
+    )
+
+    with pytest.raises(InfraError, match="uses BRL"):
+        provision.ensure_billing_account(
+            "test-sabor-da-terra",
+            "XXXXXX-XXXXXX-XXXXXX",
+        )
+
+
 def test_ensure_billing_account_rejects_unavailable_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -196,10 +223,30 @@ def test_ensure_project_budget_reuses_existing_budget(
 ) -> None:
     monkeypatch.setattr(
         provision,
+        "get_project",
+        Mock(return_value={"projectNumber": "123456"}),
+    )
+    monkeypatch.setattr(
+        provision,
         "run_json",
         Mock(
             return_value=[
-                {"displayName": "Sabor da Terra - test-sabor-da-terra"}
+                {
+                    "displayName": "Sabor da Terra - test-sabor-da-terra",
+                    "budgetFilter": {"projects": ["projects/123456"]},
+                    "amount": {
+                        "specifiedAmount": {
+                            "currencyCode": "USD",
+                            "units": "1",
+                            "nanos": 0,
+                        }
+                    },
+                    "thresholdRules": [
+                        {"thresholdPercent": 0.5, "spendBasis": "CURRENT_SPEND"},
+                        {"thresholdPercent": 0.8, "spendBasis": "CURRENT_SPEND"},
+                        {"thresholdPercent": 1.0, "spendBasis": "CURRENT_SPEND"},
+                    ],
+                }
             ]
         ),
     )
@@ -210,13 +257,51 @@ def test_ensure_project_budget_reuses_existing_budget(
         "test-sabor-da-terra",
         "XXXXXX-XXXXXX-XXXXXX",
         1.0,
+        "USD",
     )
     confirm.assert_not_called()
+
+
+def test_ensure_project_budget_rejects_incompatible_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(provision, "get_project", Mock(return_value=None))
+    monkeypatch.setattr(
+        provision,
+        "run_json",
+        Mock(
+            return_value=[
+                {
+                    "displayName": "Sabor da Terra - test-sabor-da-terra",
+                    "budgetFilter": {"projects": ["projects/test-sabor-da-terra"]},
+                    "amount": {
+                        "specifiedAmount": {
+                            "currencyCode": "USD",
+                            "units": "5",
+                            "nanos": 0,
+                        }
+                    },
+                    "thresholdRules": [
+                        {"thresholdPercent": 1.0, "spendBasis": "CURRENT_SPEND"},
+                    ],
+                }
+            ]
+        ),
+    )
+
+    with pytest.raises(InfraError, match="does not match"):
+        provision.ensure_project_budget(
+            "test-sabor-da-terra",
+            "XXXXXX-XXXXXX-XXXXXX",
+            1.0,
+            "USD",
+        )
 
 
 def test_ensure_project_budget_creates_expected_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(provision, "get_project", Mock(return_value=None))
     monkeypatch.setattr(provision, "run_json", Mock(return_value=[]))
     monkeypatch.setattr(provision, "confirm", Mock())
     run_command = Mock(return_value=completed())
@@ -226,6 +311,7 @@ def test_ensure_project_budget_creates_expected_budget(
         "test-sabor-da-terra",
         "XXXXXX-XXXXXX-XXXXXX",
         1.0,
+        "USD",
     )
 
     command = run_command.call_args.args[0]

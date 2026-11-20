@@ -30,7 +30,7 @@
     "billing": "request-based"
   },
   "inference": {
-    "mode": "vertex",
+    "mode": "developer",
     "model": "gemini-3.8-flash",
     "location": "global"
   },

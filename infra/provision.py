@@ -1,17 +1,19 @@
 import json
 import os
 import secrets
-import socket
-import subprocess
-import time
 import urllib.parse
 from getpass import getpass
 from typing import Any
 
+from cloudsql import connection_name, run_sql_with_proxy
 from common import (
     InfraError,
     base_parser,
+    command_failure,
+    format_command,
+    is_missing_resource,
     main_entry,
+    register_secret,
     require_commands,
     run_command,
 )
@@ -50,8 +52,21 @@ def run_json(command: list[str]) -> Any:
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise InfraError(
-            f"Google Cloud returned invalid JSON for: {' '.join(command)}"
+            f"Google Cloud returned invalid JSON for: {format_command(command)}"
         ) from error
+
+
+def describe_json(command: list[str], action: str) -> Any | None:
+    """Run a describe/list command, distinguishing absence from real failures."""
+    result = run_command(command, check=False, capture_output=True)
+    if result.returncode != 0:
+        if is_missing_resource(result, action):
+            return None
+        raise command_failure(result, action)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise InfraError(f"{action} returned invalid JSON.") from error
 
 
 def get_active_account() -> str:
@@ -67,7 +82,7 @@ def get_active_account() -> str:
 
 
 def get_project(project_id: str) -> dict | None:
-    result = run_command(
+    return describe_json(
         [
             "gcloud",
             "projects",
@@ -75,15 +90,8 @@ def get_project(project_id: str) -> dict | None:
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Project {project_id} lookup",
     )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise InfraError("gcloud returned invalid project data.") from error
 
 
 def confirm(message: str) -> None:
@@ -117,7 +125,29 @@ def ensure_project(project_id: str) -> bool:
     return True
 
 
-def ensure_billing_account(project_id: str, billing_account_id: str) -> None:
+def get_billing_currency(billing_account_id: str) -> str:
+    account = run_json(
+        [
+            "gcloud",
+            "billing",
+            "accounts",
+            "describe",
+            billing_account_id,
+            "--format=json",
+        ]
+    )
+    currency = str(account.get("currencyCode", "")).strip() if isinstance(account, dict) else ""
+    if not currency:
+        raise InfraError(
+            f"Could not determine the currency of billing account {billing_account_id}."
+        )
+    return currency
+
+
+def ensure_billing_account(
+    project_id: str,
+    billing_account_id: str,
+) -> str:
     accounts = run_json(
         [
             "gcloud",
@@ -139,7 +169,14 @@ def ensure_billing_account(project_id: str, billing_account_id: str) -> None:
             "Verify gcloud billing accounts list."
         )
 
-    result = run_command(
+    currency = get_billing_currency(billing_account_id)
+    if currency != "USD":
+        raise InfraError(
+            f"Billing account {billing_account_id} uses {currency}. "
+            "budget.amount_usd requires a USD billing account."
+        )
+
+    billing = describe_json(
         [
             "gcloud",
             "billing",
@@ -148,19 +185,14 @@ def ensure_billing_account(project_id: str, billing_account_id: str) -> None:
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Billing information for project {project_id}",
     )
-    if result.returncode == 0:
-        try:
-            billing = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
-            raise InfraError("gcloud returned invalid billing project data.") from error
+    if billing is not None:
         linked = str(billing.get("billingAccountName", "")).split("/")[-1]
         if linked:
             if linked == billing_account_id:
                 print("Billing: already linked to the authorized account.")
-                return
+                return currency
             raise InfraError(
                 f"Project is linked to billing account {linked}, not the configured "
                 f"{billing_account_id}. Refuse to relink automatically."
@@ -181,6 +213,7 @@ def ensure_billing_account(project_id: str, billing_account_id: str) -> None:
         ]
     )
     print("Billing: linked.")
+    return currency
 
 
 def enable_required_apis(project_id: str) -> None:
@@ -212,26 +245,20 @@ def enable_stage_5_apis(project_id: str) -> None:
 
 
 def get_service_account(project_id: str, account_name: str) -> dict | None:
-    result = run_command(
+    email = f"{account_name}@{project_id}.iam.gserviceaccount.com"
+    return describe_json(
         [
             "gcloud",
             "iam",
             "service-accounts",
             "describe",
-            f"{account_name}@{project_id}.iam.gserviceaccount.com",
+            email,
             "--project",
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Service account {email} lookup",
     )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise InfraError("gcloud returned invalid service account data.") from error
 
 
 def ensure_service_accounts(project_id: str) -> dict[str, str]:
@@ -261,7 +288,7 @@ def ensure_service_accounts(project_id: str) -> dict[str, str]:
 
 
 def get_secret(project_id: str, secret_name: str) -> dict | None:
-    result = run_command(
+    return describe_json(
         [
             "gcloud",
             "secrets",
@@ -271,15 +298,52 @@ def get_secret(project_id: str, secret_name: str) -> dict | None:
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Secret {secret_name} lookup",
     )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise InfraError("gcloud returned invalid secret data.") from error
+
+
+def get_enabled_secret_versions(project_id: str, secret_name: str) -> list[dict]:
+    versions = describe_json(
+        [
+            "gcloud",
+            "secrets",
+            "versions",
+            "list",
+            secret_name,
+            "--project",
+            project_id,
+            "--format=json",
+        ],
+        f"Secret {secret_name} versions lookup",
+    )
+    if versions is None:
+        return []
+    return [
+        version
+        for version in versions
+        if isinstance(version, dict) and version.get("state") == "ENABLED"
+    ]
+
+
+def add_secret_version(
+    project_id: str,
+    secret_name: str,
+    value: str,
+) -> None:
+    register_secret(value)
+    run_command(
+        [
+            "gcloud",
+            "secrets",
+            "versions",
+            "add",
+            secret_name,
+            "--data-file=-",
+            "--project",
+            project_id,
+        ],
+        input_text=value,
+    )
 
 
 def ensure_secret(
@@ -287,39 +351,52 @@ def ensure_secret(
     secret_name: str,
     value: str | None = None,
 ) -> bool:
-    secret = get_secret(project_id, secret_name)
-    if secret is not None:
-        print(f"Secret {secret_name}: preserved.")
-        return False
+    """Create a secret when absent and make sure it has an enabled version.
 
-    run_command(
-        [
-            "gcloud",
-            "secrets",
-            "create",
-            secret_name,
-            "--replication-policy",
-            "automatic",
-            "--project",
-            project_id,
-        ]
-    )
-    if value is not None:
+    Existing credentials are preserved. A secret that exists without an enabled
+    version is repaired with the supplied value instead of being deleted.
+    """
+    secret = get_secret(project_id, secret_name)
+    created = False
+    if secret is None:
         run_command(
             [
                 "gcloud",
                 "secrets",
-                "versions",
-                "add",
+                "create",
                 secret_name,
-                "--data-file=-",
+                "--replication-policy",
+                "automatic",
                 "--project",
                 project_id,
-            ],
-            input_text=value,
+            ]
         )
-    print(f"Secret {secret_name}: created.")
-    return True
+        created = True
+
+    if value is None:
+        if created:
+            raise InfraError(
+                f"Secret {secret_name} was created without a value. "
+                "Provide a value so it can be used."
+            )
+        if not get_enabled_secret_versions(project_id, secret_name):
+            raise InfraError(
+                f"Secret {secret_name} has no enabled version. "
+                "Set its value before continuing."
+            )
+        print(f"Secret {secret_name}: preserved.")
+        return False
+
+    if not created and get_enabled_secret_versions(project_id, secret_name):
+        print(f"Secret {secret_name}: preserved.")
+        return False
+
+    add_secret_version(project_id, secret_name, value)
+    if created:
+        print(f"Secret {secret_name}: created.")
+    else:
+        print(f"Secret {secret_name}: version restored.")
+    return created
 
 
 def bind_project_role(
@@ -362,37 +439,63 @@ def bind_secret_accessor(
     )
 
 
+def bind_service_account_user(
+    project_id: str,
+    service_account_email: str,
+    member_email: str,
+) -> None:
+    """Allow member_email to act only as the given service account."""
+    run_command(
+        [
+            "gcloud",
+            "iam",
+            "service-accounts",
+            "add-iam-policy-binding",
+            service_account_email,
+            "--member",
+            f"serviceAccount:{member_email}",
+            "--role",
+            "roles/iam.serviceAccountUser",
+            "--project",
+            project_id,
+        ]
+    )
+
+
 def configure_stage_5(project_id: str, config: dict) -> dict[str, str]:
     enable_stage_5_apis(project_id)
     emails = ensure_service_accounts(project_id)
     api_email = emails["api"]
 
-    ensure_secret(project_id, "database-url")
-    ensure_secret(project_id, "database-admin-password", secrets.token_urlsafe(48))
-    ensure_secret(project_id, "database-migrator-password", secrets.token_urlsafe(48))
+    ensure_secret(
+        project_id,
+        "database-admin-password",
+        secrets.token_urlsafe(48),
+    )
+    ensure_secret(
+        project_id,
+        "database-migrator-password",
+        secrets.token_urlsafe(48),
+    )
     ensure_secret(project_id, "jwt-secret-key", secrets.token_urlsafe(48))
 
     bind_project_role(project_id, api_email, "roles/cloudsql.client")
-    bind_project_role(project_id, api_email, "roles/cloudtasks.enqueuer")
-    bind_project_role(
-        project_id,
-        api_email,
-        "roles/iam.serviceAccountUser",
-    )
+    # Cloud Tasks queue-level enqueuer is granted when the queue is created (#39).
+    # serviceAccountUser is limited to the triage identity used by that queue.
+    bind_service_account_user(project_id, emails["tasks"], api_email)
 
     if config["inference"]["mode"] == "vertex":
         bind_project_role(project_id, api_email, "roles/aiplatform.user")
     else:
-        existing_gemini_secret = get_secret(project_id, "gemini-api-key")
-        if existing_gemini_secret is not None:
-            print("Secret gemini-api-key: preserved.")
-        else:
+        if get_secret(project_id, "gemini-api-key") is None:
             gemini_key = os.getenv("GEMINI_API_KEY")
             if not gemini_key:
                 gemini_key = getpass("Gemini Developer API key (input hidden): ").strip()
             if not gemini_key:
                 raise InfraError("GEMINI_API_KEY is required for developer inference.")
             ensure_secret(project_id, "gemini-api-key", gemini_key)
+        else:
+            print("Secret gemini-api-key: preserved.")
         bind_secret_accessor(project_id, "gemini-api-key", api_email)
 
     for secret_name in ("database-url", "jwt-secret-key"):
@@ -421,11 +524,12 @@ def get_secret_value(project_id: str, secret_name: str) -> str:
     value = result.stdout
     if not value:
         raise InfraError(f"Secret {secret_name} is empty.")
+    register_secret(value.rstrip("\r\n"))
     return value.rstrip("\r\n")
 
 
 def get_sql_instance(project_id: str, instance_name: str) -> dict | None:
-    result = run_command(
+    return describe_json(
         [
             "gcloud",
             "sql",
@@ -436,84 +540,122 @@ def get_sql_instance(project_id: str, instance_name: str) -> dict | None:
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Cloud SQL instance {instance_name} lookup",
     )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise InfraError("gcloud returned invalid Cloud SQL instance data.") from error
+
+
+def _normalized(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip().upper()
+    return value
 
 
 def validate_sql_instance(instance: dict, config: dict) -> None:
+    """Refuse to continue when an existing instance differs from the plan."""
     database_config = config["database"]
     region = config["region"]
+    settings = instance.get("settings") or {}
+    ip_configuration = settings.get("ipConfiguration") or {}
+    backup_configuration = settings.get("backupConfiguration") or {}
 
-    settings = instance.get("settings", {})
-    actual = {
-        "databaseVersion": instance.get("databaseVersion"),
-        "region": instance.get("region"),
-        "edition": settings.get("edition"),
-        "tier": settings.get("tier"),
-        "availabilityType": settings.get("availabilityType"),
-        "dataDiskType": settings.get("dataDiskSize"),
-    }
-    if actual["databaseVersion"] not in {"POSTGRES_16", None}:
+    mismatches: list[str] = []
+
+    def check(label: str, actual: Any, expected: Any) -> None:
+        if _normalized(actual) != _normalized(expected):
+            mismatches.append(
+                f"{label}: found {actual!r}, expected {expected!r}"
+            )
+
+    check("database version", instance.get("databaseVersion"), "POSTGRES_16")
+    check("region", instance.get("region"), region)
+    check("edition", settings.get("edition"), "ENTERPRISE")
+    check("tier", settings.get("tier"), database_config["tier"])
+    if settings.get("availabilityType") is not None:
+        check("availability type", settings.get("availabilityType"), "ZONAL")
+    check("disk type", settings.get("dataDiskType"), "PD_SSD")
+    check(
+        "disk size (GB)",
+        settings.get("dataDiskSizeGb"),
+        database_config["storage_size_gb"],
+    )
+    check("storage auto-increase", settings.get("storageAutoResize"), False)
+    check("backups", backup_configuration.get("enabled"), False)
+    check(
+        "point-in-time recovery",
+        backup_configuration.get("pointInTimeRecoveryEnabled"),
+        False,
+    )
+    check(
+        "deletion protection",
+        settings.get("deletionProtectionEnabled"),
+        True,
+    )
+    check("public IPv4", ip_configuration.get("ipv4Enabled"), True)
+    check(
+        "authorized networks",
+        len(ip_configuration.get("authorizedNetworks") or []),
+        0,
+    )
+    check(
+        "connector enforcement",
+        settings.get("connectorEnforcement"),
+        "REQUIRED",
+    )
+    check(
+        "server CA mode",
+        ip_configuration.get("serverCaMode"),
+        "GOOGLE_MANAGED_INTERNAL_CA",
+    )
+
+    if mismatches:
+        details = "\n".join(f"- {mismatch}" for mismatch in mismatches)
         raise InfraError(
-            f"Existing Cloud SQL instance uses {actual['databaseVersion']}; "
-            "PostgreSQL 16 is required."
-        )
-    if actual["region"] not in {region, None}:
-        raise InfraError(
-            f"Existing Cloud SQL instance is in {actual['region']}; "
-            f"{region} is required."
-        )
-    if actual["tier"] not in {database_config["tier"], None}:
-        raise InfraError(
-            f"Existing Cloud SQL tier is {actual['tier']}; "
-            f"{database_config['tier']} is required."
+            f"Existing Cloud SQL instance {database_config['instance_name']} does "
+            "not match the planned configuration. It was not modified.\n"
+            f"{details}"
         )
 
 
-def ensure_sql_instance(project_id: str, config: dict) -> dict:
+def ensure_sql_instance(
+    project_id: str,
+    config: dict,
+    admin_password: str,
+) -> dict:
     database_config = config["database"]
     instance_name = database_config["instance_name"]
     region = config["region"]
     instance = get_sql_instance(project_id, instance_name)
 
     if instance is None:
-        admin_password = get_secret_value(project_id, "database-admin-password")
         confirm(
             f"Create Cloud SQL PostgreSQL 16 instance {instance_name} "
             f"in {region}? This resource is billed."
         )
-        run_command(
-            [
-                "gcloud",
-                "sql",
-                "instances",
-                "create",
-                instance_name,
-                "--database-version=POSTGRES_16",
-                "--edition=Enterprise",
-                f"--tier={database_config['tier']}",
-                f"--region={region}",
-                "--availability-type=zonal",
-                f"--storage-size={database_config['storage_size_gb']}GB",
-                "--storage-type=SSD",
-                "--no-storage-auto-increase",
-                "--no-backup",
-                "--assign-ip",
-                "--connector-enforcement=REQUIRED",
-                "--server-ca-mode=GOOGLE_MANAGED_INTERNAL_CA",
-                "--deletion-protection",
-                f"--root-password={admin_password}",
-                "--project",
-                project_id,
-            ]
-        )
+        command = [
+            "gcloud",
+            "sql",
+            "instances",
+            "create",
+            instance_name,
+            "--database-version=POSTGRES_16",
+            "--edition=enterprise",
+            f"--tier={database_config['tier']}",
+            f"--region={region}",
+            "--availability-type=zonal",
+            f"--storage-size={database_config['storage_size_gb']}GB",
+            "--storage-type=SSD",
+            "--no-storage-auto-increase",
+            "--no-backup",
+            "--no-enable-point-in-time-recovery",
+            "--assign-ip",
+            "--connector-enforcement=REQUIRED",
+            "--server-ca-mode=GOOGLE_MANAGED_INTERNAL_CA",
+            "--deletion-protection",
+            f"--root-password={admin_password}",
+            "--project",
+            project_id,
+        ]
+        run_command(command, secrets=[admin_password])
         print(f"Cloud SQL instance {instance_name}: created.")
         instance = get_sql_instance(project_id, instance_name)
         if instance is None:
@@ -522,29 +664,11 @@ def ensure_sql_instance(project_id: str, config: dict) -> dict:
         print(f"Cloud SQL instance {instance_name}: already exists.")
 
     validate_sql_instance(instance, config)
-    run_command(
-        [
-            "gcloud",
-            "sql",
-            "instances",
-            "patch",
-            instance_name,
-            "--no-storage-auto-increase",
-            "--no-backup",
-            "--assign-ip",
-            "--connector-enforcement=REQUIRED",
-            "--server-ca-mode=GOOGLE_MANAGED_INTERNAL_CA",
-            "--clear-authorized-networks",
-            "--deletion-protection",
-            "--project",
-            project_id,
-        ]
-    )
     return instance
 
 
 def ensure_sql_database(project_id: str, instance_name: str, database_name: str) -> None:
-    result = run_command(
+    existing = describe_json(
         [
             "gcloud",
             "sql",
@@ -557,10 +681,9 @@ def ensure_sql_database(project_id: str, instance_name: str, database_name: str)
             project_id,
             "--format=json",
         ],
-        check=False,
-        capture_output=True,
+        f"Cloud SQL database {database_name} lookup",
     )
-    if result.returncode == 0:
+    if existing is not None:
         print(f"Cloud SQL database {database_name}: already exists.")
         return
 
@@ -588,74 +711,6 @@ def quote_sql_identifier(value: str) -> str:
     if not value or not all(char.isalnum() or char == "_" for char in value):
         raise InfraError("Invalid PostgreSQL identifier.")
     return '"' + value + '"'
-
-
-def wait_for_tcp_port(host: str, port: int, timeout_seconds: int = 60) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=1):
-                return
-        except OSError:
-            time.sleep(0.5)
-    raise InfraError("Cloud SQL Auth Proxy did not accept connections.")
-
-
-def run_sql_with_proxy(
-    project_id: str,
-    instance_name: str,
-    region: str,
-    database_name: str,
-    admin_password: str,
-    sql: str,
-) -> None:
-    proxy_path = "cloud-sql-proxy"
-    port = 5434
-    process = subprocess.Popen(
-        [
-            proxy_path,
-            f"--address=127.0.0.1",
-            f"--port={port}",
-            f"{project_id}:{region}:{instance_name}",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        wait_for_tcp_port("127.0.0.1", port)
-        env = os.environ.copy()
-        env["PGPASSWORD"] = admin_password
-        result = subprocess.run(
-            [
-                "psql",
-                "-h",
-                "127.0.0.1",
-                "-p",
-                str(port),
-                "-U",
-                "postgres",
-                "-d",
-                database_name,
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-f",
-                "-",
-            ],
-            input=sql,
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            message = result.stderr.strip() or "PostgreSQL returned an unknown error."
-            raise InfraError(f"Cloud SQL configuration failed: {message}")
-    finally:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
 
 
 def build_database_url(
@@ -688,7 +743,9 @@ def get_database_url_credentials(database_url: str) -> tuple[str, str]:
 
 
 def configure_stage6(project_id: str, config: dict) -> None:
-    require_commands(["gcloud", "cloud-sql-proxy", "psql"])
+    proxy_path = os.getenv("CLOUD_SQL_PROXY_BIN", "cloud-sql-proxy")
+    psql_path = os.getenv("PSQL_BIN", "psql")
+    require_commands(["gcloud", proxy_path, psql_path])
 
     run_command(
         [
@@ -706,27 +763,29 @@ def configure_stage6(project_id: str, config: dict) -> None:
     database_name = database_config["database_name"]
     region = config["region"]
 
-    ensure_sql_instance(project_id, config)
-    ensure_sql_database(project_id, instance_name, database_name)
-
-    if get_secret(project_id, "database-admin-password") is None:
-        ensure_secret(
-            project_id,
-            "database-admin-password",
-            secrets.token_urlsafe(48),
-        )
-    if get_secret(project_id, "database-migrator-password") is None:
-        ensure_secret(
-            project_id,
-            "database-migrator-password",
-            secrets.token_urlsafe(48),
-        )
+    # Secrets must have an enabled version before the instance is created or
+    # any credential is read. Existing values are never rotated.
+    ensure_secret(
+        project_id,
+        "database-admin-password",
+        secrets.token_urlsafe(48),
+    )
+    ensure_secret(
+        project_id,
+        "database-migrator-password",
+        secrets.token_urlsafe(48),
+    )
 
     admin_password = get_secret_value(project_id, "database-admin-password")
     migrator_password = get_secret_value(project_id, "database-migrator-password")
 
+    ensure_sql_instance(project_id, config, admin_password)
+    ensure_sql_database(project_id, instance_name, database_name)
+
     existing_database_url = get_secret(project_id, "database-url")
-    if existing_database_url is not None:
+    if existing_database_url is not None and get_enabled_secret_versions(
+        project_id, "database-url"
+    ):
         existing_url_value = get_secret_value(project_id, "database-url")
         app_username, app_password = get_database_url_credentials(existing_url_value)
     else:
@@ -742,22 +801,8 @@ def configure_stage6(project_id: str, config: dict) -> None:
         )
         ensure_secret(project_id, "database-url", app_database_url)
 
+    register_secret(app_password)
     migrator_username = database_config["migrator_user"]
-
-    run_command(
-        [
-            "gcloud",
-            "sql",
-            "users",
-            "set-password",
-            "postgres",
-            "--instance",
-            instance_name,
-            f"--password={admin_password}",
-            "--project",
-            project_id,
-        ]
-    )
 
     migrator_name_literal = quote_sql_literal(migrator_username)
     app_name_literal = quote_sql_literal(app_username)
@@ -772,17 +817,21 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {migrator_name_literal}) THEN
         EXECUTE 'CREATE ROLE ' || quote_ident({migrator_name_literal})
-            || ' LOGIN PASSWORD ' || quote_literal({migrator_password_literal});
+            || ' LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '
+            || quote_literal({migrator_password_literal});
     ELSE
         EXECUTE 'ALTER ROLE ' || quote_ident({migrator_name_literal})
-            || ' LOGIN PASSWORD ' || quote_literal({migrator_password_literal});
+            || ' LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '
+            || quote_literal({migrator_password_literal});
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {app_name_literal}) THEN
         EXECUTE 'CREATE ROLE ' || quote_ident({app_name_literal})
-            || ' LOGIN PASSWORD ' || quote_literal({app_password_literal});
+            || ' LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '
+            || quote_literal({app_password_literal});
     ELSE
         EXECUTE 'ALTER ROLE ' || quote_ident({app_name_literal})
-            || ' LOGIN PASSWORD ' || quote_literal({app_password_literal});
+            || ' LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '
+            || quote_literal({app_password_literal});
     END IF;
 END $$;
 
@@ -804,21 +853,89 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
     run_sql_with_proxy(
         project_id,
-        instance_name,
-        region,
+        connection_name(project_id, region, instance_name),
         database_name,
+        database_config["admin_user"],
         admin_password,
         sql,
+        proxy_path=proxy_path,
+        psql_path=psql_path,
     )
     print("Cloud SQL database, users, privileges and pgvector: configured.")
+
+
+def _budget_amount(amount_usd: float) -> tuple[int, int]:
+    units = int(amount_usd)
+    nanos = int(round((amount_usd - units) * 1_000_000_000))
+    if nanos == 1_000_000_000:
+        units += 1
+        nanos = 0
+    return units, nanos
+
+
+def _matches_project_filter(budget: dict, project_keys: set[str]) -> bool:
+    projects = (budget.get("budgetFilter") or {}).get("projects") or []
+    return any(str(project) in project_keys for project in projects)
+
+
+def verify_project_budget(
+    budget: dict,
+    project_keys: set[str],
+    amount_usd: float,
+    currency: str,
+) -> list[str]:
+    problems: list[str] = []
+    if not _matches_project_filter(budget, project_keys):
+        projects = (budget.get("budgetFilter") or {}).get("projects") or []
+        problems.append(
+            f"filter projects are {projects!r}, expected one of {sorted(project_keys)!r}"
+        )
+
+    specified = (budget.get("amount") or {}).get("specifiedAmount") or {}
+    if str(specified.get("currencyCode", "")).upper() != currency.upper():
+        problems.append(
+            f"currency is {specified.get('currencyCode')!r}, expected {currency!r}"
+        )
+    units, nanos = _budget_amount(amount_usd)
+    try:
+        actual_units = int(specified.get("units", 0) or 0)
+        actual_nanos = int(specified.get("nanos", 0) or 0)
+    except (TypeError, ValueError):
+        actual_units, actual_nanos = -1, -1
+    if (actual_units, actual_nanos) != (units, nanos):
+        problems.append(
+            f"amount is {actual_units}.{actual_nanos:09d}, "
+            f"expected {units}.{nanos:09d}"
+        )
+
+    actual_thresholds = sorted(
+        (
+            float(rule.get("thresholdPercent", 0)),
+            str(rule.get("spendBasis", "CURRENT_SPEND")).upper(),
+        )
+        for rule in budget.get("thresholdRules") or []
+        if isinstance(rule, dict)
+    )
+    expected_thresholds = [(0.5, "CURRENT_SPEND"), (0.8, "CURRENT_SPEND"), (1.0, "CURRENT_SPEND")]
+    if actual_thresholds != expected_thresholds:
+        problems.append(
+            f"thresholds are {actual_thresholds!r}, expected {expected_thresholds!r}"
+        )
+    return problems
 
 
 def ensure_project_budget(
     project_id: str,
     billing_account_id: str,
     amount_usd: float,
+    currency: str,
 ) -> None:
     display_name = f"Sabor da Terra - {project_id}"
+    project = get_project(project_id)
+    project_keys = {f"projects/{project_id}"}
+    if project is not None and project.get("projectNumber"):
+        project_keys.add(f"projects/{project['projectNumber']}")
+
     budgets = run_json(
         [
             "gcloud",
@@ -830,22 +947,40 @@ def ensure_project_budget(
             "--format=json",
         ]
     )
+    matching = [
+        budget
+        for budget in budgets
+        if isinstance(budget, dict)
+        and (
+            budget.get("displayName") == display_name
+            or _matches_project_filter(budget, project_keys)
+        )
+    ]
 
-    existing = next(
-        (
-            budget
-            for budget in budgets
-            if isinstance(budget, dict)
-            and budget.get("displayName") == display_name
-        ),
-        None,
-    )
-    if existing is not None:
-        print("Budget: already exists.")
+    if matching:
+        problems: list[str] = []
+        for budget in matching:
+            budget_problems = verify_project_budget(
+                budget,
+                project_keys,
+                amount_usd,
+                currency,
+            )
+            problems.extend(
+                f"{budget.get('displayName') or budget.get('name')}: {problem}"
+                for problem in budget_problems
+            )
+        if problems:
+            details = "\n".join(f"- {problem}" for problem in problems)
+            raise InfraError(
+                "An existing budget for this project does not match the planned "
+                f"configuration. It was not modified.\n{details}"
+            )
+        print("Budget: already exists and matches the plan.")
         return
 
     confirm(
-        f"Create project budget for {project_id} at US$ {amount_usd:.2f} "
+        f"Create project budget for {project_id} at {currency} {amount_usd:.2f} "
         "with alerts at 50%, 80%, and 100%?"
     )
     command = [
@@ -858,7 +993,7 @@ def ensure_project_budget(
         "--display-name",
         display_name,
         "--budget-amount",
-        f"{amount_usd:.2f}USD",
+        f"{amount_usd:.2f}{currency}",
         "--calendar-period",
         "month",
         "--filter-projects",
@@ -879,12 +1014,13 @@ def provision(config: dict) -> None:
     print(f"Active gcloud account: {account}")
 
     ensure_project(project_id)
-    ensure_billing_account(project_id, billing_account_id)
+    currency = ensure_billing_account(project_id, billing_account_id)
     enable_required_apis(project_id)
     ensure_project_budget(
         project_id,
         billing_account_id,
         float(config["budget"]["amount_usd"]),
+        currency,
     )
     configure_stage_5(project_id, config)
     configure_stage6(project_id, config)
