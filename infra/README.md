@@ -22,3 +22,13 @@ python infra/destroy.py
 ```
 
 As operações ainda serão implementadas em blocos separados. Os comandos não usam recursos pagos até a implementação completa da operação correspondente.
+
+## Etapa 4: projeto e faturamento
+
+Depois de autenticar e preencher `infra/config.local.json`, execute:
+
+```bash
+python infra/provision.py
+```
+
+O script valida a conta `gcloud` ativa, cria ou identifica o projeto, exige a conta de faturamento configurada, habilita as APIs mínimas desta etapa e cria o orçamento mensal restrito ao projeto. Ele não cria Spend Caps e não ativa créditos ou planos pagos.

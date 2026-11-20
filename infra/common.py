@@ -54,10 +54,23 @@ def validate_config(config: dict[str, Any]) -> None:
     project_id = config["project_id"].strip()
     if not project_id or project_id == "sabor-da-terra":
         raise InfraError("Set a unique project_id in the local configuration.")
-    if len(project_id) > 30 or not all(char.isalnum() or char == "-" for char in project_id):
+    if (
+        len(project_id) < 6
+        or len(project_id) > 30
+        or not project_id[0].isalpha()
+        or not project_id.isascii()
+        or not all(char.islower() or char.isdigit() or char == "-" for char in project_id)
+        or project_id.startswith("-")
+        or project_id.endswith("-")
+        or "--" in project_id
+    ):
         raise InfraError("project_id is not a valid Google Cloud Project ID.")
     if config["region"].strip() != "us-central1":
         raise InfraError("Only the planned region us-central1 is supported.")
+
+    billing_account_id = str(config.get("billing_account_id", "")).strip()
+    if not billing_account_id:
+        raise InfraError("Set billing_account_id in the local configuration.")
 
     inference = config["inference"]
     mode = inference.get("mode")
@@ -70,6 +83,9 @@ def validate_config(config: dict[str, Any]) -> None:
     thresholds = config["budget"].get("alert_thresholds")
     if not isinstance(thresholds, list) or thresholds != [0.5, 0.8, 1.0]:
         raise InfraError("budget.alert_thresholds must be [0.5, 0.8, 1.0].")
+    amount = config["budget"].get("amount_usd")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise InfraError("budget.amount_usd must be greater than zero.")
 
 
 def redact_sensitive(value: str) -> str:

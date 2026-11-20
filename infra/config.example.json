@@ -1,7 +1,7 @@
 {
   "project_id": "sabor-da-terra",
   "region": "us-central1",
-  "billing_account_id": "",
+  "billing_account_id": "XXXXXX-XXXXXX-XXXXXX",
   "database": {
     "instance_name": "sabor-da-terra-db",
     "database_name": "sabor_da_terra",
