@@ -28,10 +28,11 @@ from api.agents.consultation.schemas import (
 from api.agents.triage import TRIAGE_OUTPUT_KEY
 from api.app import fastapi_app as app
 from api.database import get_db
-from api.dependencies import get_agent_orchestrator
+from api.dependencies import get_agent_orchestrator, get_embedding_client
 from api.models.chat_message import ChatMessage, ChatMessageFlow, ChatMessageRole
 from api.models.citation import Citation
 from api.models.document import Document, DocumentChunk
+from api.rag import DeterministicHashEmbeddingClient
 from api.repositories.chat import ChatRepository
 from api.repositories.document import DocumentRepository
 from api.repositories.solicitation import SolicitationRepository
@@ -140,6 +141,9 @@ async def api_client(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_agent_orchestrator] = lambda: fake_orchestrator
+    app.dependency_overrides[get_embedding_client] = (
+        lambda: DeterministicHashEmbeddingClient(dimensions=128)
+    )
     transport = httpx.ASGITransport(app=app)
     try:
         async with httpx.AsyncClient(

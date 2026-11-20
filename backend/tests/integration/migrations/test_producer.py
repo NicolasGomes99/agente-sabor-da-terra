@@ -33,7 +33,7 @@ async def run_alembic(*args: str) -> None:
 
 @pytest_asyncio.fixture
 async def migrated_engine(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncEngine]:
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         monkeypatch.setenv("DATABASE_URL", postgres.get_connection_url(driver="asyncpg"))
         await run_alembic("upgrade", "head")
         engine = create_async_engine(postgres.get_connection_url(driver="asyncpg"))

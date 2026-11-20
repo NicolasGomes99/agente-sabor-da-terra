@@ -1,12 +1,21 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
-from ...dependencies import get_current_user, get_document_service
-from ...models.document import Document
-from ...schemas.document import DocumentResponse
+from ...dependencies import (
+    get_current_user,
+    get_document_indexing_service,
+    get_document_service,
+)
+from ...models.document import Document, DocumentProcessingStatus
+from ...rag.indexing import (
+    DocumentIndexingNotFoundError,
+    DocumentIndexingService,
+    UnsupportedDocumentFormatError,
+)
+from ...schemas.document import DocumentIndexingStatusResponse, DocumentResponse
 from ...services.document import (
     DocumentCitedError,
     DocumentNotFoundError,
@@ -41,11 +50,76 @@ router = APIRouter(
 )
 
 DocumentServiceDependency = Annotated[DocumentService, Depends(get_document_service)]
+DocumentIndexingDependency = Annotated[
+    DocumentIndexingService, Depends(get_document_indexing_service)
+]
 
 
 @router.get("", response_model=list[DocumentResponse])
 async def list_documents(service: DocumentServiceDependency) -> list[Document]:
     return await service.list_documents()
+
+
+@router.get(
+    "/indexing",
+    response_model=list[DocumentIndexingStatusResponse],
+)
+async def list_document_indexing_status(
+    indexer: DocumentIndexingDependency,
+    processing_status: Annotated[
+        DocumentProcessingStatus | None,
+        Query(alias="status"),
+    ] = None,
+) -> list[DocumentIndexingStatusResponse]:
+    statuses = (processing_status.value,) if processing_status is not None else None
+    rows = await indexer.list_documents_by_status(statuses)
+    return [
+        DocumentIndexingStatusResponse(
+            id=doc.id,
+            original_filename=doc.original_filename,
+            processing_status=doc.processing_status,  # type: ignore[arg-type]
+            processing_error=doc.processing_error,
+            indexed_at=doc.indexed_at,
+            chunk_count=chunk_count,
+        )
+        for doc, chunk_count in rows
+    ]
+
+
+@router.post(
+    "/{document_id}/reindex",
+    response_model=DocumentIndexingStatusResponse,
+    responses={
+        404: {"description": "Document not found.", "content": ERROR_DETAIL_CONTENT},
+        422: {
+            "description": "Document format is not supported for indexing.",
+            "content": ERROR_DETAIL_CONTENT,
+        },
+    },
+)
+async def reindex_document(
+    document_id: UUID,
+    indexer: DocumentIndexingDependency,
+) -> DocumentIndexingStatusResponse:
+    try:
+        summary = await indexer.index_document(document_id, raise_on_error=False)
+    except DocumentIndexingNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Document not found.") from error
+    except UnsupportedDocumentFormatError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    document = await indexer.repository.get_by_id(document_id)
+    return DocumentIndexingStatusResponse(
+        id=summary.document_id,
+        original_filename=summary.original_filename,
+        processing_status=summary.status,  # type: ignore[arg-type]
+        processing_error=summary.error,
+        indexed_at=document.indexed_at if document is not None else None,
+        chunk_count=summary.active_chunk_count,
+    )
 
 
 @router.post(

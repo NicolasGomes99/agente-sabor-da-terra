@@ -11,6 +11,8 @@ from ..models.chat_message import ChatMessage
 from ..models.chat_session import ChatSession
 from ..models.citation import Citation
 from ..models.document import Document, DocumentChunk
+from ..rag.extractors import is_indexable_document
+from ..rag.indexing import DocumentIndexingService
 from ..repositories.document import DocumentRepository
 from ..storage.base import DocumentReader, DocumentStorage
 
@@ -67,10 +69,15 @@ class DocumentCitedError(Exception):
 
 class DocumentService:
     def __init__(
-        self, repository: DocumentRepository, storage: DocumentStorage
+        self,
+        repository: DocumentRepository,
+        storage: DocumentStorage,
+        *,
+        indexer: DocumentIndexingService | None = None,
     ) -> None:
         self.repository = repository
         self.storage = storage
+        self.indexer = indexer
 
     async def list_documents(self) -> list[Document]:
         return await self.repository.list_all()
@@ -100,6 +107,12 @@ class DocumentService:
             logger.exception("Could not confirm document creation for storage key %s", key)
             await self._rollback()
             raise
+
+        if self.indexer is not None and is_indexable_document(original_filename):
+            await self.indexer.index_document(document.id, raise_on_error=False)
+            refreshed = await self.repository.get_by_id(document.id)
+            if refreshed is not None:
+                return refreshed
 
         return document
 

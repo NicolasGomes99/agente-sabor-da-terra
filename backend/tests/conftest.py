@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,7 +18,7 @@ from api.models import Base
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
     with PostgresContainer(
-        image="postgres:16-alpine",
+        image="pgvector/pgvector:pg16",
         username="test",
         password="test",
         dbname="test",
@@ -35,6 +36,7 @@ async def engine(database_url: str) -> AsyncIterator[AsyncEngine]:
     database_engine = create_async_engine(database_url)
 
     async with database_engine.begin() as connection:
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await connection.run_sync(Base.metadata.create_all)
 
     try:

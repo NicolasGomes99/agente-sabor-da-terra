@@ -67,3 +67,49 @@ def get_document_storage_bucket() -> str:
     if not bucket:
         raise RuntimeError("DOCUMENT_STORAGE_BUCKET must be set.")
     return bucket
+
+
+DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_EMBEDDING_DIMENSIONS = 768
+MAX_EMBEDDING_DIMENSIONS = 3072
+DEFAULT_RAG_SEMANTIC_TOP_K = 8
+
+
+def get_embedding_model() -> str:
+    configured = os.getenv("GEMINI_EMBEDDING_MODEL")
+    if configured is None:
+        return DEFAULT_EMBEDDING_MODEL
+    model = configured.strip()
+    if not model:
+        raise RuntimeError("GEMINI_EMBEDDING_MODEL must not be blank.")
+    return model
+
+
+def get_embedding_dimensions() -> int:
+    configured = os.getenv("GEMINI_EMBEDDING_DIMENSIONS")
+    if configured is None:
+        return DEFAULT_EMBEDDING_DIMENSIONS
+    error_message = (
+        f"GEMINI_EMBEDDING_DIMENSIONS must be between 1 and {MAX_EMBEDDING_DIMENSIONS}."
+    )
+    try:
+        dimensions = int(configured)
+    except ValueError as error:
+        raise RuntimeError(error_message) from error
+    if not 1 <= dimensions <= MAX_EMBEDDING_DIMENSIONS:
+        raise RuntimeError(error_message)
+    return dimensions
+
+
+def get_rag_semantic_top_k() -> int:
+    configured = os.getenv("RAG_SEMANTIC_TOP_K")
+    if configured is None:
+        return DEFAULT_RAG_SEMANTIC_TOP_K
+    error_message = "RAG_SEMANTIC_TOP_K must be an integer greater than or equal to 1."
+    try:
+        top_k = int(configured)
+    except ValueError as error:
+        raise RuntimeError(error_message) from error
+    if top_k < 1:
+        raise RuntimeError(error_message)
+    return top_k

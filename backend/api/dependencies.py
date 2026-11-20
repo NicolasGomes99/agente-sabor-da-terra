@@ -14,6 +14,9 @@ from .config import (
 )
 from .database import get_db
 from .models.user import User
+from .rag.embeddings import EmbeddingClient, GeminiEmbeddingClient
+from .rag.indexing import DocumentIndexingService
+from .rag.retrieval import RagRetrievalService
 from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
 from .repositories.lot import LotRepository
@@ -31,7 +34,6 @@ from .services.conversation import (
     AgentOrchestrator,
     ConversationService,
     NullTriageOriginMetadataProvider,
-    PersistedDocumentSourceProvider,
     TriageOriginMetadataProvider,
     default_agent_orchestrator,
 )
@@ -82,11 +84,46 @@ def get_document_storage() -> DocumentStorage:
     return GCSDocumentStorage(_get_gcs_client().bucket(bucket_name))
 
 
+def get_embedding_client() -> EmbeddingClient:
+    return GeminiEmbeddingClient()
+
+
+def get_document_indexing_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    storage: Annotated[DocumentStorage, Depends(get_document_storage)],
+    embedding_client: Annotated[EmbeddingClient, Depends(get_embedding_client)],
+) -> DocumentIndexingService:
+    return DocumentIndexingService(
+        DocumentRepository(session),
+        storage,
+        embedding_client,
+    )
+
+
+def get_document_source_provider(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    embedding_client: Annotated[EmbeddingClient, Depends(get_embedding_client)],
+) -> DocumentSourceProvider:
+    return RagRetrievalService(
+        DocumentRepository(session),
+        embedding_client,
+    )
+
+
 def get_document_service(
     session: Annotated[AsyncSession, Depends(get_db, scope="function")],
     storage: Annotated[DocumentStorage, Depends(get_document_storage)],
+    embedding_client: Annotated[
+        EmbeddingClient | None, Depends(get_embedding_client)
+    ] = None,
 ) -> DocumentService:
-    return DocumentService(DocumentRepository(session), storage)
+    repository = DocumentRepository(session)
+    indexer = (
+        DocumentIndexingService(repository, storage, embedding_client)
+        if embedding_client is not None
+        else None
+    )
+    return DocumentService(repository, storage, indexer=indexer)
 
 
 def get_chat_service(
@@ -177,12 +214,6 @@ def get_order_draft_service(
     )
 
 
-def get_document_source_provider(
-    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
-) -> DocumentSourceProvider:
-    return PersistedDocumentSourceProvider(DocumentRepository(session))
-
-
 def get_triage_origin_metadata_provider() -> TriageOriginMetadataProvider:
     return NullTriageOriginMetadataProvider()
 
@@ -194,8 +225,8 @@ def get_agent_orchestrator() -> AgentOrchestrator:
 def get_agent_integration_service(
     session: Annotated[AsyncSession, Depends(get_db, scope="function")],
     source_provider: Annotated[
-        DocumentSourceProvider, Depends(get_document_source_provider)
-    ],
+        DocumentSourceProvider | None, Depends(get_document_source_provider)
+    ] = None,
 ) -> AgentIntegrationService:
     return AgentIntegrationService(
         ChatRepository(session),

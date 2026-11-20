@@ -302,7 +302,7 @@ def test_solicitation_migration_upgrade_downgrade_upgrade(
     }
 
     with PostgresContainer(
-        image="postgres:16-alpine",
+        image="pgvector/pgvector:pg16",
         username="test",
         password="test",
         dbname="test_solicitation_migration",
@@ -406,7 +406,7 @@ def test_full_migration_history_upgrades_from_zero_and_existing_main(
     config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
 
     with PostgresContainer(
-        image="postgres:16-alpine",
+        image="pgvector/pgvector:pg16",
         username="test",
         password="test",
         dbname="test_full_migration_history",

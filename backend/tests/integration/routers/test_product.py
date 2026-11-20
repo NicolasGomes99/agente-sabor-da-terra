@@ -142,13 +142,14 @@ async def test_products_remain_available_after_app_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("JWT_SECRET_KEY", TEST_SECRET_KEY)
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         url = postgres.get_connection_url(driver="asyncpg")
         engine = create_async_engine(url)
         product_id = uuid4()
         email = "restart@example.com"
         try:
             async with engine.begin() as connection:
+                await connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
                 await connection.run_sync(Base.metadata.create_all)
             sessions = async_sessionmaker(engine, expire_on_commit=False)
             async with sessions.begin() as session:
