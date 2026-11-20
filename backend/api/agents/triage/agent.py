@@ -232,4 +232,4 @@ async def analyze_triage_message(
         revalidated["received_date_reference"] = payload.received_date.isoformat()
         analysis = TriageAnalysis.model_validate(revalidated)
 
-    return analysis
+    return analysis.model_copy(update={"document_enrichment": None})

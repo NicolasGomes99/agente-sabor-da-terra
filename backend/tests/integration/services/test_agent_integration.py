@@ -810,3 +810,63 @@ async def test_persist_orchestrator_response_rejects_mismatched_sessions_without
         select(func.count()).select_from(Citation)
     )
     assert citation_count == 0
+
+
+@pytest.mark.asyncio
+async def test_persists_documentary_triage_using_retrieved_chunks(
+    db_session: AsyncSession,
+) -> None:
+    user_id, _ = await _create_user_and_token(db_session)
+    chat_repository = ChatRepository(db_session)
+    chat = await chat_repository.create_session(user_id)
+    document = Document(
+        original_filename="contrato-pnae.txt", storage_key=f"pnae-{uuid4()}",
+    )
+    db_session.add(document)
+    await db_session.flush()
+    header = DocumentChunk(document_id=document.id, content="Contrato nº 045/2026-PNAE")
+    clause = DocumentChunk(
+        document_id=document.id, content="Todos os produtores devem possuir DAP ou CAF vigente.",
+    )
+    db_session.add_all([header, clause])
+    await db_session.commit()
+    chunks = await DocumentRepository(db_session).list_chunks_by_ids([header.id, clause.id])
+    provider = InMemoryDocumentSourceProvider(sources=document_chunks_to_source_items(chunks))
+    integration = AgentIntegrationService(chat_repository, source_provider=provider)
+    request, sources = await integration.prepare_triage_chat_input(
+        chat.id, "Pedido conforme o contrato 045/2026-PNAE.",
+        flow=OrchestratorFlow.TRIAGE,
+        interaction_at="2026-11-19",
+        triage_context=PreparedTriageContext(
+            original_received_at="2026-10-28", is_new_triage_message=True,
+        ),
+    )
+    response = await orchestrate_request(
+        request,
+        triage_runner=_FakeSpecialistRunner(TRIAGE_OUTPUT_KEY, {
+            "summary": "Pedido PNAE.", "request_type": "pedido",
+            "urgency": "indeterminada", "urgency_reason": "Sem prazo.",
+            "received_date_reference": "2026-10-28",
+            "extracted_data": {"contract_reference": "045/2026-PNAE"},
+        }),
+        triage_enrichment_runner=_FakeSpecialistRunner("evidence", {
+            "evidence": [{
+                "kind": "dap_caf", "source_id": str(clause.id),
+                "excerpt": clause.content, "contract_reference": "045/2026-PNAE",
+            }, {
+                "kind": "document", "source_id": str(uuid4()),
+                "excerpt": clause.content, "description": "Fonte não disponibilizada",
+            }],
+        }),
+    )
+    message, prepared = await integration.persist_orchestrator_response(
+        chat.id, response, provided_sources=sources.sources, original_request=request,
+    )
+    assert prepared.citation_chunk_ids == [clause.id]
+    assert "DAP ou CAF vigente" in message.content
+    assert "Fonte não disponibilizada" not in message.content
+    assert to_pernambuco_date(message.reference_received_at) == date(2026, 10, 28)
+    citations = await db_session.scalars(
+        select(Citation).where(Citation.message_id == message.id),
+    )
+    assert [citation.chunk_id for citation in citations] == [clause.id]

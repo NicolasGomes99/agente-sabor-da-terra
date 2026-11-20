@@ -508,15 +508,22 @@ def convert_orchestrator_response(
             orchestrator_response.result,
             original_request,
         )
+        enrichment = orchestrator_response.result.document_enrichment
+        cited_ids = enrichment.source_ids if enrichment else []
+        provided_ids = set(provided_source_ids)
+        chunk_ids = list(dict.fromkeys(
+            uid for sid in cited_ids
+            if sid in provided_ids and (uid := _parse_optional_uuid(sid)) is not None
+        ))
         return AgentPreparedResponse(
             session_id=session_uuid,
             selected_flow="triage",
             selected_agent="triage_agent",
             content=triage_payload.content,
             reference_received_at=ref_ts,
-            citation_chunk_ids=[],
+            citation_chunk_ids=chunk_ids,
             provided_source_ids=provided_source_ids,
-            rejected_source_ids=[],
+            rejected_source_ids=[sid for sid in cited_ids if sid not in provided_ids],
             triage=triage_payload,
             consultation=None,
         )

@@ -55,4 +55,9 @@ def format_triage_analysis(analysis: TriageAnalysis) -> str:
     lines.extend(requirement_lines(extracted.requirements))
     lines.extend(document_lines(extracted))
     lines.extend(pending_lines(analysis.pending_items))
+    if analysis.document_enrichment and analysis.document_enrichment.findings:
+        lines.append("Verificação documental e operacional:")
+        for finding in analysis.document_enrichment.findings:
+            follow_up = " [a verificar]" if finding.needs_follow_up else ""
+            lines.append(f"- {finding.description}{follow_up}")
     return "\n".join(lines)
