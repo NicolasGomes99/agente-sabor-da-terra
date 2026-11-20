@@ -1,0 +1,76 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: sabor_da_terra
+      POSTGRES_USER: sabor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sabor -d sabor_da_terra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: dockerfile
+      target: local
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sabor:${POSTGRES_PASSWORD}@db:5432/sabor_da_terra
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+
+      DOCUMENT_STORAGE_BACKEND: local
+      DOCUMENT_STORAGE_DIR: /app/storage
+
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_GENAI_USE_VERTEXAI: "false"
+      GOOGLE_GENAI_USE_ENTERPRISE: "false"
+      GEMINI_AGENT_MODEL: ${GEMINI_AGENT_MODEL:-gemini-3.1-flash-lite}
+
+      GEMINI_EMBEDDING_MODEL: gemini-embedding-001
+      GEMINI_EMBEDDING_DIMENSIONS: "768"
+      RAG_SEMANTIC_TOP_K: "8"
+
+    ports:
+      - "127.0.0.1:8000:8080"
+    volumes:
+      - document_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        alembic upgrade head &&
+        exec uvicorn api.app:app --host 0.0.0.0 --port 8080
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/openapi.json', timeout=5)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  document_storage:
