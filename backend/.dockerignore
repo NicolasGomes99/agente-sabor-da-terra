@@ -10,6 +10,16 @@
 !api/
 !api/**
 
+# Local environment
+!alembic.ini
+!alembic/
+!alembic/**
+!scripts/
+!scripts/**
+!data/
+!data/**
+!create_dev_user.py
+
 # Python artifacts
 **/__pycache__/
 **/*.pyc
