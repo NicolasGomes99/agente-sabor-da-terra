@@ -2,16 +2,30 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
-from ..dependencies import get_current_user, get_solicitation_service
-from ..schemas.chat import MessageCreate, MessageOut
+from ..dependencies import (
+    get_conversation_service,
+    get_current_user,
+    get_solicitation_service,
+)
+from ..schemas.chat import MessageCreate, MessageOut, RecoverableOperationOut
 from ..schemas.solicitation import (
     SolicitationCreate,
     SolicitationOut,
     SolicitationSessionOut,
+    SolicitationTurnOut,
+)
+from ..services.conversation import (
+    ConversationExecutionError,
+    ConversationOperationConflictError,
+    ConversationOperationInProgressError,
+    ConversationService,
+    ConversationSessionNotFoundError,
+    ConversationSolicitationFinishedError,
+    StaleOperationResultError,
 )
 from ..services.solicitation import (
-    SolicitationFinishedError,
     SolicitationNotFoundError,
     SolicitationService,
 )
@@ -23,6 +37,7 @@ router = APIRouter(
 )
 
 Service = Annotated[SolicitationService, Depends(get_solicitation_service)]
+Conversation = Annotated[ConversationService, Depends(get_conversation_service)]
 
 
 def _not_found() -> HTTPException:
@@ -72,45 +87,79 @@ async def get_solicitation(
 )
 async def open_solicitation_session(
     solicitation_id: UUID,
-    service: Service,
+    conversation_service: Conversation,
 ) -> SolicitationSessionOut:
     try:
-        solicitation, chat, messages, read_only = (
-            await service.open_session(solicitation_id)
-        )
-    except SolicitationNotFoundError as error:
+        state = await conversation_service.open_triage_session(solicitation_id)
+    except ConversationSessionNotFoundError as error:
         raise _not_found() from error
 
     return SolicitationSessionOut(
-        **SolicitationOut.model_validate(solicitation).model_dump(),
-        title=chat.title,
-        created_at=chat.created_at,
-        read_only=read_only,
-        messages=[MessageOut.model_validate(message) for message in messages],
+        **SolicitationOut.model_validate(state.solicitation).model_dump(),
+        title=state.session.title,
+        created_at=state.session.created_at,
+        read_only=state.read_only,
+        messages=[MessageOut.model_validate(message) for message in state.messages],
+        pending_operation=(
+            RecoverableOperationOut.from_operation(
+                state.recoverable_operation[0],
+                state.recoverable_operation[1],
+            )
+            if state.recoverable_operation is not None
+            else None
+        ),
     )
 
 
 @router.post(
     "/{solicitation_id}/messages",
-    response_model=MessageOut,
+    response_model=SolicitationTurnOut,
     status_code=status.HTTP_201_CREATED,
 )
 async def add_solicitation_message(
     solicitation_id: UUID,
     payload: MessageCreate,
-    service: Service,
-) -> MessageOut:
+    conversation_service: Conversation,
+) -> SolicitationTurnOut | JSONResponse:
     try:
-        message = await service.add_message(solicitation_id, payload.content)
-    except SolicitationNotFoundError as error:
+        turn = await conversation_service.send_triage_chat_message(
+            solicitation_id=solicitation_id,
+            content=payload.content,
+            operation_id=payload.operation_id,
+            retry=payload.retry,
+        )
+    except ConversationSessionNotFoundError as error:
         raise _not_found() from error
-    except SolicitationFinishedError as error:
+    except (
+        ConversationSolicitationFinishedError,
+        ConversationOperationConflictError,
+        ConversationOperationInProgressError,
+        StaleOperationResultError,
+    ) as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(error),
         ) from error
+    except ConversationExecutionError as error:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "detail": str(error),
+                "operation_id": error.operation_id,
+                "user_message": MessageOut.model_validate(
+                    error.user_message
+                ).model_dump(mode="json"),
+            },
+        )
 
-    return MessageOut.model_validate(message)
+    assert turn.solicitation is not None
+    return SolicitationTurnOut(
+        operation_id=turn.operation_id,
+        selected_flow=turn.selected_flow,
+        user_message=MessageOut.model_validate(turn.user_message),
+        assistant_message=MessageOut.model_validate(turn.assistant_message),
+        solicitation=SolicitationOut.model_validate(turn.solicitation),
+    )
 
 
 @router.post(

@@ -1,20 +1,31 @@
-import { MessageList } from '../../chat/components/MessageList'
 import { ChatInput } from '../../chat/components/ChatInput'
+import { ConversationStatusBanner } from '../../chat/components/ConversationStatusBanner'
+import { MessageList } from '../../chat/components/MessageList'
 import type { ChatMessage } from '../../chat/types'
 import type { SolicitationSession } from '../types'
 
 interface TriageConversationProps {
   session: SolicitationSession
   sending: boolean
+  delayed: boolean
+  recoveredProcessing?: boolean
   sendError: string | null
+  canRetrySend: boolean
+  clearInputCount: number
   onSend: (content: string) => Promise<void>
+  onRetrySend: () => void
 }
 
 export function TriageConversation({
   session,
   sending,
+  delayed,
+  recoveredProcessing = false,
   sendError,
+  canRetrySend,
+  clearInputCount,
   onSend,
+  onRetrySend,
 }: TriageConversationProps) {
   return (
     <div className="triage-conversation-card">
@@ -25,13 +36,18 @@ export function TriageConversation({
         getPresentation={triageMessagePresentation}
       />
 
-      {sendError && (
-        <p className="triage-action-error" role="alert">{sendError}</p>
-      )}
+      <ConversationStatusBanner
+        sending={sending}
+        delayed={delayed}
+        recoveredProcessing={recoveredProcessing}
+        error={sendError}
+        canRetry={canRetrySend}
+        onRetry={onRetrySend}
+      />
 
       {!session.read_only ? (
         <ChatInput
-          key={session.id}
+          key={`${session.id}-${clearInputCount}`}
           onSend={onSend}
           disabled={sending}
         />

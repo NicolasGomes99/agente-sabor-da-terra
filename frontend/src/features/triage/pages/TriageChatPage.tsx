@@ -32,12 +32,17 @@ function TriageChatPageContent({
   const {
     detail,
     sending,
+    delayed,
+    recoveredProcessing,
     finalizing,
     confirmingFinalize,
     sendError,
     finalizeError,
     notice,
+    canRetrySend,
+    clearInputCount,
     handleSendMessage,
+    handleRetrySend,
     handleFinalize,
     startFinalize,
     cancelFinalize,
@@ -105,8 +110,13 @@ function TriageChatPageContent({
         <TriageConversation
           session={session}
           sending={sending}
+          delayed={delayed}
+          recoveredProcessing={recoveredProcessing}
           sendError={sendError}
+          canRetrySend={canRetrySend}
+          clearInputCount={clearInputCount}
           onSend={handleSendMessage}
+          onRetrySend={handleRetrySend}
         />
       </section>
     </AppShell>

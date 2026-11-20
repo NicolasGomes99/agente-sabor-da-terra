@@ -39,7 +39,21 @@ export const messageB = { id: 'message-b', role: 'user', content: 'Mensagem de B
 export const detailA = { ...sessionA, messages: [messageA] }
 export const detailB = { ...sessionB, messages: [messageB] }
 export const sentA = { ...messageA, id: 'sent-a', content: 'Novo envio de A', position: 2, citations: [] }
+export const replyA = { ...messageA, id: 'reply-a', role: 'assistant', content: 'Resposta do assistente para A', position: 3, citations: [] }
+export const turnA = {
+  operation_id: 'op-a',
+  selected_flow: 'consultation' as const,
+  user_message: sentA,
+  assistant_message: replyA,
+}
 export const sentB = { ...messageB, id: 'sent-b', content: 'Novo envio de B', position: 2, citations: [] }
+export const replyB = { ...messageB, id: 'reply-b', role: 'assistant', content: 'Resposta do assistente para B', position: 3, citations: [] }
+export const turnB = {
+  operation_id: 'op-b',
+  selected_flow: 'consultation' as const,
+  user_message: sentB,
+  assistant_message: replyB,
+}
 
 export function deferred<T>() {
   let resolve!: (value: T) => void
@@ -84,7 +98,7 @@ export function setupChatPageTests() {
     list.mockReset().mockResolvedValue([sessionA, sessionB])
     read.mockReset().mockImplementation(async (id) => id === sessionA.id ? detailA : detailB)
     create.mockReset().mockResolvedValue(sessionC)
-    send.mockReset().mockResolvedValue(sentA)
+    send.mockReset().mockResolvedValue(turnA)
   })
 
   afterEach(clearAccessToken)

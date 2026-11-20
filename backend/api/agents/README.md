@@ -19,7 +19,7 @@ No ambiente publicado, a modalidade de acesso e o modelo serão definidos durant
 
 ## Ponto de Entrada da Aplicação
 
-A função assíncrona **`orchestrate_request`** é o ponto de entrada oficial disponibilizado pela camada de agentes para integração com os serviços de chat e de processamento da triagem. A integração com esses serviços ainda será implementada.
+A função assíncrona **`orchestrate_request`** é o ponto de entrada oficial disponibilizado pela camada de agentes para integração com os serviços de chat e de processamento da triagem. A integração conversacional é coordenada por `ConversationService` (`api.services.conversation`), compartilhado pelos endpoints `POST /chat/sessions/{session_id}/messages` (`ChatTurnOut`) e `POST /solicitations/{solicitation_id}/messages` (`SolicitationTurnOut`), com identificação persistente de operações (`chat_operations`), proteção contra duplicidade/resultados atrasados e reconstrução do histórico a partir do PostgreSQL.
 
 - **Caminho de importação principal:**
   ```python

@@ -84,7 +84,10 @@ class ChatRepository:
         user_id: UUID,
         *,
         lock: bool = False,
+        share_lock: bool = False,
     ) -> ChatSession | None:
+        if lock and share_lock:
+            raise ValueError("Cannot acquire both exclusive and shared locks.")
         statement = (
             select(ChatSession)
             .where(
@@ -95,10 +98,29 @@ class ChatRepository:
         )
         if lock:
             statement = statement.with_for_update(of=ChatSession)
+        elif share_lock:
+            statement = statement.with_for_update(read=True, of=ChatSession)
         return await self.session.scalar(statement)
 
-    async def get_session_by_id(self, session_id: UUID) -> ChatSession | None:
-        return await self.session.get(ChatSession, session_id)
+    async def get_session_by_id(
+        self,
+        session_id: UUID,
+        *,
+        lock: bool = False,
+        share_lock: bool = False,
+    ) -> ChatSession | None:
+        if lock and share_lock:
+            raise ValueError("Cannot acquire both exclusive and shared locks.")
+        statement = (
+            select(ChatSession)
+            .where(ChatSession.id == session_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock:
+            statement = statement.with_for_update(of=ChatSession)
+        elif share_lock:
+            statement = statement.with_for_update(read=True, of=ChatSession)
+        return await self.session.scalar(statement)
 
     async def add_message(
         self,

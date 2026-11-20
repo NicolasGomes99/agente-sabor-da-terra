@@ -23,9 +23,18 @@ from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
 from .repositories.solicitation import SolicitationRepository
 from .repositories.user import UserRepository
+from .schemas.agent_integration import DocumentSourceProvider
 from .services.agent_integration import AgentIntegrationService
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
+from .services.conversation import (
+    AgentOrchestrator,
+    ConversationService,
+    NullTriageOriginMetadataProvider,
+    PersistedDocumentSourceProvider,
+    TriageOriginMetadataProvider,
+    default_agent_orchestrator,
+)
 from .services.document import DocumentService
 from .services.lot import LotService
 from .services.order import OrderService
@@ -168,7 +177,48 @@ def get_order_draft_service(
     )
 
 
+def get_document_source_provider(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> DocumentSourceProvider:
+    return PersistedDocumentSourceProvider(DocumentRepository(session))
+
+
+def get_triage_origin_metadata_provider() -> TriageOriginMetadataProvider:
+    return NullTriageOriginMetadataProvider()
+
+
+def get_agent_orchestrator() -> AgentOrchestrator:
+    return default_agent_orchestrator
+
+
 def get_agent_integration_service(
     session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    source_provider: Annotated[
+        DocumentSourceProvider, Depends(get_document_source_provider)
+    ],
 ) -> AgentIntegrationService:
-    return AgentIntegrationService(ChatRepository(session))
+    return AgentIntegrationService(
+        ChatRepository(session),
+        source_provider=source_provider,
+    )
+
+
+def get_conversation_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    source_provider: Annotated[
+        DocumentSourceProvider, Depends(get_document_source_provider)
+    ],
+    triage_origin_provider: Annotated[
+        TriageOriginMetadataProvider,
+        Depends(get_triage_origin_metadata_provider),
+    ],
+    orchestrator: Annotated[
+        AgentOrchestrator, Depends(get_agent_orchestrator)
+    ],
+) -> ConversationService:
+    return ConversationService(
+        session,
+        source_provider=source_provider,
+        triage_origin_provider=triage_origin_provider,
+        orchestrator=orchestrator,
+    )

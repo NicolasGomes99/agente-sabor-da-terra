@@ -28,6 +28,7 @@ from api.agents.consultation.schemas import (
 from api.agents.triage import TRIAGE_OUTPUT_KEY
 from api.app import fastapi_app as app
 from api.database import get_db
+from api.dependencies import get_agent_orchestrator
 from api.models.chat_message import ChatMessage, ChatMessageFlow, ChatMessageRole
 from api.models.citation import Citation
 from api.models.document import Document, DocumentChunk
@@ -121,7 +122,24 @@ async def api_client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
+    async def fake_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="consultation",
+            selected_agent="consultation_agent",
+            result=ConsultationResponse(
+                answer=f"Resposta simulada para: {request.message_text}",
+                reference_date_used="2026-11-19",
+                source_ids=[],
+                cited_sources=[],
+                has_sufficient_data=False,
+            ),
+        )
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_agent_orchestrator] = lambda: fake_orchestrator
     transport = httpx.ASGITransport(app=app)
     try:
         async with httpx.AsyncClient(
@@ -671,12 +689,12 @@ async def test_whitespace_only_messages_are_rejected_across_chat_and_solicitatio
         json={"content": "   Qual o prazo da política comercial?   "},
     )
     assert ok_resp.status_code == 201
-    assert ok_resp.json()["content"] == "Qual o prazo da política comercial?"
+    assert ok_resp.json()["user_message"]["content"] == "Qual o prazo da política comercial?"
 
     history = await AgentIntegrationService(ChatRepository(db_session)).load_session_history(
         session_id
     )
-    assert len(history) == 1
+    assert len(history) == 2
     assert history[0].content == "Qual o prazo da política comercial?"
 
     # Também rejeita mensagens compostas só por espaços no chat da triagem e no repositório

@@ -107,12 +107,21 @@ class SolicitationService:
         if solicitation.status == SolicitationStatus.RECEIVED:
             solicitation.status = SolicitationStatus.IN_REVIEW
 
-        await self._commit()
-
-        chat = await self.repository.get_session(solicitation.session_id)
-        if chat is None:
-            raise SolicitationNotFoundError("Sessão não encontrada.")
-        messages = await self.repository.list_messages(solicitation.session_id)
+        try:
+            chat = await self.repository.get_session(
+                solicitation.session_id,
+                share_lock=True,
+            )
+            if chat is None:
+                await self._rollback()
+                raise SolicitationNotFoundError("Sessão não encontrada.")
+            messages = await self.repository.list_messages(solicitation.session_id)
+            await self._commit()
+        except SolicitationNotFoundError:
+            raise
+        except Exception:
+            await self._rollback()
+            raise
         return solicitation, chat, messages, read_only
 
     async def add_message(

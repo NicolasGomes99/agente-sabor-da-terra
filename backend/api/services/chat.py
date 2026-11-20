@@ -24,7 +24,11 @@ class ChatService:
     async def get_session_with_messages(
             self, session_id: UUID, user_id: UUID
     ) -> tuple[ChatSession, list[ChatMessage]]:
-        chat = await self.repository.get_session(session_id, user_id)
+        chat = await self.repository.get_session(
+            session_id,
+            user_id,
+            share_lock=True,
+        )
         if chat is None:
             raise SessionNotFoundError
         messages = await self.repository.list_messages(chat.id)
@@ -33,7 +37,11 @@ class ChatService:
     async def add_message(
             self, session_id: UUID, user_id: UUID, content: str
     ) -> ChatMessage:
-        chat = await self.repository.get_session(session_id, user_id)
+        chat = await self.repository.get_session(
+            session_id,
+            user_id,
+            lock=True,
+        )
         if chat is None:
             raise SessionNotFoundError
         message = await self.repository.add_message(chat.id, content)

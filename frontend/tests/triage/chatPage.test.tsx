@@ -3,13 +3,17 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AuthProvider } from '../../src/features/auth/AuthContext'
+import { PROCESSING_DELAY_WARNING_MS } from '../../src/features/chat/conversationOperation'
 import { TriageChatPage } from '../../src/features/triage/pages/TriageChatPage'
 import {
   finalizeSolicitation,
   openSolicitationSession,
   sendSolicitationMessage,
 } from '../../src/features/triage/triageApi'
-import type { SolicitationSession } from '../../src/features/triage/types'
+import type {
+  SolicitationSession,
+  SolicitationTurnResponse,
+} from '../../src/features/triage/types'
 import { ApiError } from '../../src/lib/api-client'
 import { getAccessToken, setAccessToken } from '../../src/lib/auth-storage'
 
@@ -71,6 +75,28 @@ const clarification = {
   created_at: timestamp,
   citations: [],
 }
+const updatedAssistantMessage = {
+  id: 'message-analysis-updated',
+  role: 'assistant',
+  content: 'Análise atualizada: entrega reagendada para 05/11/2026 sem pendências.',
+  position: 4,
+  created_at: timestamp,
+  citations: [],
+}
+const clarificationTurn: SolicitationTurnResponse = {
+  operation_id: 'op-triage-1',
+  selected_flow: 'triage',
+  user_message: clarification,
+  assistant_message: updatedAssistantMessage,
+  solicitation: {
+    id: session.id,
+    session_id: session.session_id,
+    summary: 'Pedido atualizado de queijo coalho para 05/11/2026.',
+    request_type: 'pedido',
+    urgency: 'normal',
+    status: 'em_analise',
+  },
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -111,7 +137,7 @@ describe('TriageChatPage', () => {
     localStorage.clear()
     setAccessToken('test-token')
     read.mockReset().mockResolvedValue(session)
-    send.mockReset().mockResolvedValue(clarification)
+    send.mockReset().mockResolvedValue(clarificationTurn)
     finalize.mockReset().mockResolvedValue({
       id: session.id,
       session_id: session.session_id,
@@ -123,6 +149,7 @@ describe('TriageChatPage', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     localStorage.clear()
   })
 
@@ -154,38 +181,147 @@ describe('TriageChatPage', () => {
     expect(editor().disabled).toBe(false)
   })
 
-  it('sends a clarification into the shared conversation', async () => {
-    const pending = deferred<typeof clarification>()
+  it('sends a clarification, shows processing status, displays assistant reply and updates card without changing status', async () => {
+    const pending = deferred<SolicitationTurnResponse>()
     send.mockReturnValueOnce(pending.promise)
     renderPage()
     await screen.findByRole('heading', { name: session.summary })
 
     submit(clarification.content)
 
-    expect(send).toHaveBeenCalledExactlyOnceWith(session.id, {
-      content: clarification.content,
-    })
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      session.id,
+      expect.objectContaining({
+        content: clarification.content,
+        operation_id: expect.any(String),
+      }),
+      expect.any(AbortSignal),
+    )
     expect(editor().disabled).toBe(true)
-    await act(async () => pending.resolve(clarification))
+    expect(screen.getByRole('status').textContent).toContain('processando')
+    await act(async () => pending.resolve(clarificationTurn))
 
     const log = screen.getByRole('log')
     expect(within(log).getByText('Funcionário')).toBeTruthy()
     expect(within(log).getByText(clarification.content)).toBeTruthy()
+    expect(within(log).getByText(updatedAssistantMessage.content)).toBeTruthy()
+    // Cartão atualizado (resumo, tipo e urgência) preservando o estado Em análise e a mensagem original
+    expect(
+      screen.getByRole('heading', { name: clarificationTurn.solicitation.summary }),
+    ).toBeTruthy()
+    expect(screen.getByText('Em análise')).toBeTruthy()
+    expect(screen.getByText('Normal')).toBeTruthy()
+    expect(screen.getByText('Pedido')).toBeTruthy()
+    expect(within(log).getByText(session.messages[0].content)).toBeTruthy()
     expect(editor().value).toBe('')
     expect(editor().disabled).toBe(false)
   })
 
-  it('preserves the draft and shows an error when sending fails', async () => {
+  it('preserves the draft and shows an error with retry when sending fails', async () => {
     send.mockRejectedValueOnce(new Error('Offline'))
     renderPage()
     await screen.findByRole('heading', { name: session.summary })
 
     submit('Mensagem que não foi enviada')
 
-    expect((await screen.findByRole('alert')).textContent)
-      .toBe('Não foi possível enviar a mensagem.')
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Não foi possível enviar a mensagem.',
+    )
     expect(editor().value).toBe('Mensagem que não foi enviada')
     expect(screen.queryByText('Funcionário')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeTruthy()
+  })
+
+  it('preserves user message on 502 agent failure and retries with same operation_id without duplicating', async () => {
+    send
+      .mockRejectedValueOnce(
+        new ApiError(502, {
+          detail: 'Não foi possível obter resposta do assistente. Tente novamente.',
+          operation_id: 'op-triage-502',
+          user_message: clarification,
+        }),
+      )
+      .mockResolvedValueOnce({
+        ...clarificationTurn,
+        operation_id: 'op-triage-502',
+      })
+    renderPage()
+    await screen.findByRole('heading', { name: session.summary })
+
+    submit(clarification.content)
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Não foi possível obter resposta do assistente.',
+    )
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: session.summary })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      session.id,
+      { content: clarification.content, operation_id: 'op-triage-502', retry: true },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(updatedAssistantMessage.content)).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
+  })
+
+  it('warns after 60 seconds, retries with same operation_id, and ignores stale analysis', async () => {
+    vi.useFakeTimers()
+    const attempt1 = deferred<SolicitationTurnResponse>()
+    const attempt2 = deferred<SolicitationTurnResponse>()
+    send.mockReturnValueOnce(attempt1.promise).mockReturnValueOnce(attempt2.promise)
+    renderPage()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('heading', { name: session.summary })).toBeTruthy()
+
+    submit(clarification.content)
+    const firstOpId = send.mock.calls[0][1].operation_id
+    const firstSignal = send.mock.calls[0][2]
+
+    await act(async () => {
+      vi.advanceTimersByTime(PROCESSING_DELAY_WARNING_MS)
+    })
+
+    expect(screen.getByRole('status').textContent).toContain('demorando')
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+    expect(firstSignal?.aborted).toBe(true)
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      session.id,
+      { content: clarification.content, operation_id: firstOpId, retry: true },
+      expect.any(AbortSignal),
+    )
+
+    await act(async () => attempt2.resolve(clarificationTurn))
+    expect(
+      screen.getByRole('heading', { name: clarificationTurn.solicitation.summary }),
+    ).toBeTruthy()
+
+    // Resultado atrasado da tentativa 1 não substitui a análise vigente
+    await act(async () => {
+      attempt1.resolve({
+        ...clarificationTurn,
+        assistant_message: {
+          ...updatedAssistantMessage,
+          id: 'stale-msg',
+          content: 'Análise atrasada',
+        },
+        solicitation: {
+          ...clarificationTurn.solicitation,
+          summary: 'Resumo atrasado',
+          urgency: 'urgente',
+        },
+      })
+    })
+    expect(screen.queryByText('Análise atrasada')).toBeNull()
+    expect(
+      screen.getByRole('heading', { name: clarificationTurn.solicitation.summary }),
+    ).toBeTruthy()
   })
 
   it('switches to read-only when another employee finalized the conversation', async () => {
@@ -195,8 +331,9 @@ describe('TriageChatPage', () => {
 
     submit('Mensagem atrasada')
 
-    expect((await screen.findByRole('alert')).textContent)
-      .toBe('A conversa foi finalizada e não aceita novas mensagens.')
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'A conversa foi finalizada e não aceita novas mensagens.',
+    )
     expect(screen.queryByRole('textbox')).toBeNull()
     expect(screen.getByText('Finalizada')).toBeTruthy()
     expect(screen.getByText(/permanece disponível/)).toBeTruthy()
@@ -264,6 +401,89 @@ describe('TriageChatPage', () => {
     expect(screen.queryByRole('textbox')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Encerrar solicitação' })).toBeNull()
     expect(within(screen.getByRole('log')).getByText(session.messages[0].content)).toBeTruthy()
+  })
+
+  it('recovers a failed triage operation after reopening and retries without duplicating messages', async () => {
+    read.mockResolvedValueOnce({
+      ...session,
+      messages: [...session.messages, clarification],
+      pending_operation: {
+        operation_id: 'op-triage-reopen-fail',
+        status: 'failed',
+        user_message_id: clarification.id,
+        content: clarification.content,
+        attempt: 1,
+        created_at: '2026-11-17T12:02:00Z',
+        updated_at: '2026-11-17T12:02:05Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...clarificationTurn,
+      operation_id: 'op-triage-reopen-fail',
+    })
+
+    renderPage()
+    await screen.findByRole('heading', { name: session.summary })
+
+    expect(screen.getByRole('alert').textContent).toContain('Tente novamente')
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }))
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      session.id,
+      {
+        content: clarification.content,
+        operation_id: 'op-triage-reopen-fail',
+        retry: true,
+      },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(updatedAssistantMessage.content)).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: clarificationTurn.solicitation.summary }),
+    ).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('recovers an interrupted processing triage operation after reopening and reuses operation_id', async () => {
+    read.mockResolvedValueOnce({
+      ...session,
+      messages: [...session.messages, clarification],
+      pending_operation: {
+        operation_id: 'op-triage-reopen-proc',
+        status: 'processing',
+        user_message_id: clarification.id,
+        content: clarification.content,
+        attempt: 1,
+        created_at: '2026-11-17T12:02:00Z',
+        updated_at: '2026-11-17T12:02:00Z',
+      },
+    })
+    send.mockResolvedValueOnce({
+      ...clarificationTurn,
+      operation_id: 'op-triage-reopen-proc',
+    })
+
+    renderPage()
+    await screen.findByRole('heading', { name: session.summary })
+
+    expect(screen.getByRole('status').textContent).toContain('processamento')
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeTruthy()
+
+    // Reenviar o mesmo conteúdo reutiliza o operation_id recuperado sem duplicar
+    submit(clarification.content)
+
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      session.id,
+      {
+        content: clarification.content,
+        operation_id: 'op-triage-reopen-proc',
+        retry: true,
+      },
+      expect.any(AbortSignal),
+    )
+    expect(await screen.findByText(updatedAssistantMessage.content)).toBeTruthy()
+    expect(within(screen.getByRole('log')).getAllByText(clarification.content)).toHaveLength(1)
   })
 
   it('shows a not-found state and returns to the queue', async () => {

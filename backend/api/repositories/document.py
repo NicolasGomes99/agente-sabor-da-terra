@@ -29,6 +29,20 @@ class DocumentRepository:
     async def get_by_id(self, document_id: UUID) -> Document | None:
         return await self.session.get(Document, document_id)
 
+    async def list_chunks(self, *, limit: int = 50) -> list[DocumentChunk]:
+        statement = (
+            select(DocumentChunk)
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .options(selectinload(DocumentChunk.document))
+            .order_by(
+                Document.original_filename.asc(),
+                DocumentChunk.record_id.asc().nullslast(),
+                DocumentChunk.id.asc(),
+            )
+            .limit(limit)
+        )
+        return list((await self.session.scalars(statement)).all())
+
     async def list_chunks_by_ids(
         self, chunk_ids: Sequence[UUID]
     ) -> list[DocumentChunk]:

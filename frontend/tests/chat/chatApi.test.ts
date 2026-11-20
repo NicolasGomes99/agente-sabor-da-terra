@@ -66,13 +66,24 @@ describe('chat API', () => {
   })
 
   it('sends a message to the requested session', async () => {
-    fetchMock.mockResolvedValueOnce(Response.json(message, { status: 201 }))
+    const turn = {
+      operation_id: 'op-1',
+      selected_flow: 'consultation',
+      user_message: message,
+      assistant_message: { ...message, id: 'message-b', role: 'assistant', content: 'Oi!' },
+    }
+    fetchMock.mockResolvedValueOnce(Response.json(turn, { status: 201 }))
 
-    await expect(sendChatMessage(session.id, { content: message.content })).resolves.toEqual(message)
+    await expect(
+      sendChatMessage(session.id, { content: message.content, operation_id: 'op-1' }),
+    ).resolves.toEqual(turn)
 
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       `${baseUrl}/chat/sessions/${session.id}/messages`,
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ content: message.content }) }),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: message.content, operation_id: 'op-1' }),
+      }),
     )
     const headers = new Headers(fetchMock.mock.calls[0][1]?.headers)
     expect(headers.get('Authorization')).toBe('Bearer test-token')
