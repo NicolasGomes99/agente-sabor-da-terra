@@ -30,12 +30,13 @@
     "billing": "request-based"
   },
   "inference": {
-    "mode": "developer",
+    "mode": null,
     "model": "gemini-3.8-flash",
     "location": "global"
   },
   "budget": {
-    "amount_usd": 1.0,
+    "currency": "USD",
+    "amount": 1.0,
     "alert_thresholds": [0.5, 0.8, 1.0]
   }
 }
