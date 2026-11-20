@@ -16,6 +16,7 @@ from .database import get_db
 from .models.user import User
 from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
+from .repositories.lot import LotRepository
 from .repositories.order import OrderRepository
 from .repositories.order_draft import OrderDraftRepository
 from .repositories.producer import ProducerRepository
@@ -25,6 +26,7 @@ from .repositories.user import UserRepository
 from .services.auth import AuthService, InvalidAccessTokenError
 from .services.chat import ChatService
 from .services.document import DocumentService
+from .services.lot import LotService
 from .services.order import OrderService
 from .services.order_draft import OrderDraftService
 from .services.producer import ProducerService
@@ -129,6 +131,19 @@ def get_order_service(
     return OrderService(
         repository=OrderRepository(session),
         product_repository=ProductRepository(session),
+    )
+
+
+def get_lot_service(
+    session: Annotated[
+        AsyncSession,
+        Depends(get_db, scope="function"),
+    ],
+) -> LotService:
+    return LotService(
+        repository=LotRepository(session),
+        order_repository=OrderRepository(session),
+        producer_repository=ProducerRepository(session),
     )
 
 

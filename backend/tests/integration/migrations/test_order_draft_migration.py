@@ -227,8 +227,8 @@ def test_order_drafts_upgrade_downgrade_and_reupgrade(
     assert revision is not None
 
     parent = revision.down_revision
-    assert isinstance(parent, str)
-    assert len(script.get_heads()) == 1
+    assert parent == "0009_create_lots"
+    assert script.get_heads() == [DRAFT_REVISION]
     assert DRAFT_REVISION in {
         entry.revision for entry in script.walk_revisions()
     }

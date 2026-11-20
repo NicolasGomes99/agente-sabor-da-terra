@@ -1,14 +1,19 @@
 """HTTP contract over the same real PostgreSQL cases as the service tests."""
 
+from decimal import Decimal
 from uuid import uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import delete
 
 from api import database
 from api.app import app
+from api.models.lot import Lot
 from api.models.order_draft import OrderDraft
+from api.models.producer import Producer
+from api.models.producer_product import ProducerProduct
 from api.models.solicitation import Solicitation, SolicitationStatus
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
@@ -51,6 +56,82 @@ def urls(case, draft_id=None):
         f"{prefix}/order-draft",
         f"{prefix}/order-drafts/{draft_id or case.draft_id}/confirm",
     )
+
+
+@pytest_asyncio.fixture
+async def producer(case):
+    producer_id = uuid4()
+    async with case.factory.begin() as session:
+        session.add(
+            Producer(
+                id=producer_id,
+                code=str(producer_id),
+                name="Produtor do pedido pelo chat",
+                cpf=str(producer_id),
+                active=True,
+            )
+        )
+        await session.flush()
+        session.add(
+            ProducerProduct(
+                producer_id=producer_id,
+                product_id=case.products[0],
+            )
+        )
+    try:
+        yield producer_id
+    finally:
+        async with case.factory.begin() as session:
+            await session.execute(delete(Lot).where(Lot.producer_id == producer_id))
+            await session.execute(
+                delete(ProducerProduct).where(ProducerProduct.producer_id == producer_id)
+            )
+            await session.execute(delete(Producer).where(Producer.id == producer_id))
+
+
+@pytest.mark.parametrize("quantity,unit", [("4", "kg"), ("4000", "g")])
+async def test_linked_order_and_repeated_confirmation_include_lots_and_balance(
+    http, case, producer, quantity, unit
+):
+    client, headers, _ = http
+    read_url, confirm_url = urls(case)
+    payload = case.confirmation().model_dump(mode="json")
+    confirmed = await client.post(confirm_url, headers=headers, json=payload)
+    assert confirmed.status_code == 201, confirmed.text
+    order = confirmed.json()
+    item = order["items"][0]
+    assert item["lots"] == []
+    assert Decimal(item["balance"]) == 10
+
+    allocated = await client.post(
+        f"/orders/{order['id']}/items/{item['id']}/lots",
+        headers=headers,
+        json={
+            "producer_id": str(producer),
+            "quantity": quantity,
+            "unit": unit,
+            "delivery_date": "2026-11-06",
+            "availability_confirmed": True,
+        },
+    )
+    assert allocated.status_code == 201, allocated.text
+    lot = allocated.json()
+    assert lot["producer"]["id"] == str(producer)
+
+    reopened = await client.get(read_url, headers=headers)
+    assert reopened.status_code == 200, reopened.text
+    repeated = await client.post(confirm_url, headers=headers, json=payload)
+    assert repeated.status_code == 200, repeated.text
+
+    for saved_order in (reopened.json()["order"], repeated.json()):
+        assert saved_order["id"] == order["id"]
+        assert saved_order["items"][0]["product"] == item["product"]
+        saved_lots = saved_order["items"][0]["lots"]
+        assert len(saved_lots) == 1
+        assert {
+            **saved_lots[0], "quantity": Decimal(saved_lots[0]["quantity"])
+        } == {**lot, "quantity": Decimal(quantity)}
+        assert Decimal(saved_order["items"][0]["balance"]) == 6
 
 
 async def test_read_confirm_and_reopen_preserves_order(http, case):

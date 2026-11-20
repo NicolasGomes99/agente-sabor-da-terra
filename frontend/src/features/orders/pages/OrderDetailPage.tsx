@@ -4,8 +4,9 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
+import { LotSection } from '../components/LotSection'
 import { deliveryLabel, orderError } from '../orderHelpers'
-import { cancelOrder } from '../ordersApi'
+import { cancelOrder, getOrder } from '../ordersApi'
 import { useOrder } from '../useOrder'
 import './orders.css'
 
@@ -49,6 +50,17 @@ function OrderDetail({ id }: { id: string }) {
     } finally {
       inProgress.current = false
       if (mounted.current) setPending(false)
+    }
+  }
+
+  async function refreshOrder() {
+    try {
+      const order = await getOrder(id)
+      if (!mounted.current) return
+      setState({ status: 'ready', order })
+    } catch (cause) {
+      if (!mounted.current) return
+      if (cause instanceof ApiError && cause.status === 401) logout()
     }
   }
 
@@ -99,6 +111,7 @@ function OrderDetail({ id }: { id: string }) {
         {order.cancelled && <p className="order-muted">Pedido cancelado. A edição está indisponível.</p>}
       </aside>
     </div>
+    <LotSection order={order} onChanged={refreshOrder} />
     <dialog className="order-dialog" ref={dialog} aria-labelledby="cancel-heading"
       onCancel={(event) => { event.preventDefault(); if (!pending) setConfirming(false) }}
       onClose={() => setConfirming(false)}>

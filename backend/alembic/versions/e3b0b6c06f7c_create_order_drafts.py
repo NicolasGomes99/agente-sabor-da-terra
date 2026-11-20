@@ -1,7 +1,7 @@
 """create order drafts
 
 Revision ID: e3b0b6c06f7c
-Revises: 8a63f9d204e1
+Revises: 0009_create_lots
 Create Date: 2026-11-19 17:33:46.038308
 
 """
@@ -15,7 +15,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "e3b0b6c06f7c"
-down_revision: str | Sequence[str] | None = "8a63f9d204e1"
+down_revision: str | Sequence[str] | None = "0009_create_lots"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

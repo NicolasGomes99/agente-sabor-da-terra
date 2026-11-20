@@ -24,6 +24,17 @@ class ProducerRepository:
     async def get_by_id(self, producer_id: UUID) -> Producer | None:
         return await self.session.get(Producer, producer_id)
 
+    async def is_associated(
+        self,
+        producer_id: UUID,
+        product_id: UUID,
+    ) -> bool:
+        statement = select(ProducerProduct).where(
+            ProducerProduct.producer_id == producer_id,
+            ProducerProduct.product_id == product_id,
+        )
+        return await self.session.scalar(statement) is not None
+
     async def list_products_by_producer_ids(
         self, producer_ids: list[UUID],
     ) -> dict[UUID, list[Product]]:

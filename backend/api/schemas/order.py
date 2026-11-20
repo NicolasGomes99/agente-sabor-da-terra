@@ -39,11 +39,32 @@ class OrderItemUpdate(OrderItemCreate):
     id: UUID | None = None
 
 
+class LotProducerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+
+
+class LotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    item_id: UUID | None
+    producer: LotProducerResponse
+    quantity: Decimal
+    unit: str | None
+    delivery_date: date
+    availability_confirmed: bool | None
+
+
 class OrderItemResponse(OrderItemCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     product: ProductResponse
+    lots: list[LotResponse] = Field(default_factory=list)
+    balance: Decimal | None = None
 
 
 class OrderBase(BaseModel):
