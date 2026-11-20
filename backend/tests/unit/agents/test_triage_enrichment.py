@@ -153,6 +153,16 @@ async def test_ped_2026_004_uses_contract_and_checks_dap_and_honey_certificate()
         certificate.source_id,
     }
     assert "Verificação documental e operacional" in prepared.content
+    dap_line = next(
+        line for line in prepared.content.splitlines() if "DAP ou CAF vigente" in line
+    )
+    assert f"[[fonte:{contract.source_id}]]" in dap_line
+    assert certificate.source_id not in dap_line
+    certificate_line = next(
+        line for line in prepared.content.splitlines() if "documenta cobertura" in line
+    )
+    assert f"[[fonte:{certificate.source_id}]]" in certificate_line
+    assert contract.source_id not in certificate_line
     assert "DAP ou CAF vigente" in prepared.content
 
 
@@ -319,4 +329,154 @@ async def test_no_documents_keeps_original_extraction_and_signals_gap():
     assert any(
         "Nenhuma fonte recuperada" in f.description
         for f in result.document_enrichment.findings
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "product", "scope", "amount", "start", "end", "expected"),
+    [
+        (
+            "hortalicas.txt",
+            "Tomate cereja",
+            "P004",
+            300,
+            "2026-11-01",
+            "2026-11-07",
+            "capacidade exclusiva",
+        ),
+        (
+            "goiaba_paluma.txt",
+            "Goiaba paluma",
+            "P001",
+            500,
+            "2027-07-01",
+            "2027-07-07",
+            "janela sazonal",
+        ),
+        (
+            "goiaba_paluma.txt",
+            "Goiaba paluma",
+            "P001",
+            500,
+            "2027-03-28",
+            "2027-04-03",
+            "janela sazonal",
+        ),
+        (
+            "goiaba_paluma.txt",
+            "Goiaba paluma",
+            "P001",
+            500,
+            "2027-01-01",
+            "2027-01-07",
+            "não supera",
+        ),
+        (
+            "goiaba_paluma.txt",
+            "Goiaba paluma",
+            "P001",
+            100,
+            "2027-07-01",
+            "2027-07-07",
+            "supera a capacidade",
+        ),
+        (
+            "goiaba_paluma.txt",
+            "Goiaba paluma",
+            "P010",
+            300,
+            "2027-07-01",
+            "2027-07-07",
+            "restrição de safra",
+        ),
+    ],
+)
+async def test_capacity_uses_documented_product_scope_and_season(
+    filename,
+    product,
+    scope,
+    amount,
+    start,
+    end,
+    expected,
+):
+    content = (DATA / "fichas_tecnicas" / filename).read_text(encoding="utf-8")
+    document = source(filename, content)
+    excerpt = (
+        content.split(scope, 1)[1].split("Capacidade:", 1)[1].splitlines()[0].strip()
+    )
+    result = await enrich_triage_analysis(
+        analysis(product, quantity=200, start=start, end=end),
+        [document],
+        runner=runner(
+            {
+                "kind": "capacity",
+                "source_id": document.source_id,
+                "excerpt": excerpt,
+                "product": product,
+                "scope": scope,
+                "amount": amount,
+                "unit": "kg",
+                "period": "semana",
+            }
+        ),
+    )
+    related = [
+        finding
+        for finding in result.document_enrichment.findings
+        if finding.source_ids == [document.source_id]
+    ]
+    assert len(related) == 1
+    assert expected in related[0].description and related[0].needs_follow_up
+    assert related[0].kind == (
+        "capacidade_estimada"
+        if expected in {"não supera", "supera a capacidade"}
+        else "pendencia"
+    )
+
+
+async def test_general_and_contractual_organic_requirements_resolve_scope_and_keep_sources():
+    clause = "Certificação orgânica obrigatória para o Mel silvestre."
+    contract = source("contrato.txt", f"Contrato 045/2026-PNAE. {clause}")
+    extracted = analysis(
+        contract_reference="045/2026-PNAE",
+        general_conditions=[
+            "Certificação orgânica obrigatória para todos os produtos."
+        ],
+        items=[{"product": "Mel silvestre"}, {"product": "Goiaba paluma"}],
+    )
+    result = await enrich_triage_analysis(
+        extracted,
+        [contract],
+        runner=runner(
+            {
+                "kind": "contract",
+                "source_id": contract.source_id,
+                "excerpt": clause,
+                "contract_reference": "045/2026-PNAE",
+                "description": clause,
+            }
+        ),
+    )
+    findings = {
+        finding.description: finding for finding in result.document_enrichment.findings
+    }
+    honey = findings[
+        "Mel silvestre: falta comprovar cobertura e vigência da certificação orgânica."
+    ]
+    assert honey.source_ids == [contract.source_id]
+    assert (
+        "Goiaba paluma: falta comprovar cobertura e vigência da certificação orgânica."
+        in findings
+    )
+
+
+async def test_unspecified_organic_requirement_asks_which_products():
+    result = await enrich_triage_analysis(
+        analysis(general_conditions=["Exigida certificação orgânica."]),
+        [],
+    )
+    assert any(
+        "Esclarecer quais produtos" in finding.description
+        for finding in result.document_enrichment.findings
     )

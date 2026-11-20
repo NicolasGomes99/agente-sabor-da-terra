@@ -864,6 +864,8 @@ async def test_persists_documentary_triage_using_retrieved_chunks(
     )
     assert prepared.citation_chunk_ids == [clause.id]
     assert "DAP ou CAF vigente" in message.content
+    assert f"[[fonte:{clause.id}]]" in message.content
+    assert f"[[fonte:{header.id}]]" not in message.content
     assert "Fonte não disponibilizada" not in message.content
     assert to_pernambuco_date(message.reference_received_at) == date(2026, 10, 28)
     citations = await db_session.scalars(

@@ -1,4 +1,4 @@
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -189,7 +189,9 @@ def infer_source_kind(
     record_fields: dict[str, Any] | None = None,
 ) -> SourceKind:
     """Infere SourceKind coerente com o nome do arquivo e presença de registro estruturado."""
-    basename = document_name.replace("\\", "/").rsplit("/", maxsplit=1)[-1].strip().lower()
+    basename = (
+        document_name.replace("\\", "/").rsplit("/", maxsplit=1)[-1].strip().lower()
+    )
     if basename == "financeiro.csv":
         return SourceKind.FINANCIAL_RECORD
     if basename == "lotes.csv":
@@ -375,10 +377,14 @@ def prepare_triage_chat_request(
     )
 
 
-def convert_triage_analysis(analysis: TriageAnalysis) -> AgentTriageResponsePayload:
+def convert_triage_analysis(
+    analysis: TriageAnalysis,
+    *,
+    source_references: Mapping[str, str] | None = None,
+) -> AgentTriageResponsePayload:
     """Converte TriageAnalysis para o formato da aplicação reaproveitando format_triage_analysis."""
     return AgentTriageResponsePayload(
-        content=format_triage_analysis(analysis),
+        content=format_triage_analysis(analysis, source_references=source_references),
         summary=analysis.summary,
         request_type=SolicitationType(analysis.request_type.value),
         urgency=SolicitationUrgency(analysis.urgency.value),
@@ -461,7 +467,10 @@ def _resolve_triage_response_timestamp(
 ) -> datetime:
     target_date = date.fromisoformat(analysis.received_date_reference)
     if original_request is not None:
-        for candidate in (original_request.message_received_at, original_request.received_at):
+        for candidate in (
+            original_request.message_received_at,
+            original_request.received_at,
+        ):
             if candidate is None:
                 continue
             normalized = normalize_message_reference_timestamp(candidate)
@@ -503,7 +512,6 @@ def convert_orchestrator_response(
                 "Inconsistent OrchestratorResponse: TriageAnalysis requires "
                 "selected_flow='triage'."
             )
-        triage_payload = convert_triage_analysis(orchestrator_response.result)
         ref_ts = _resolve_triage_response_timestamp(
             orchestrator_response.result,
             original_request,
@@ -511,10 +519,26 @@ def convert_orchestrator_response(
         enrichment = orchestrator_response.result.document_enrichment
         cited_ids = enrichment.source_ids if enrichment else []
         provided_ids = set(provided_source_ids)
-        chunk_ids = list(dict.fromkeys(
-            uid for sid in cited_ids
-            if sid in provided_ids and (uid := _parse_optional_uuid(sid)) is not None
-        ))
+        chunk_ids = list(
+            dict.fromkeys(
+                uid
+                for sid in cited_ids
+                if sid in provided_ids
+                and (uid := _parse_optional_uuid(sid)) is not None
+            )
+        )
+        source_references = {
+            source.source_id: (
+                f"[[fonte:{chunk_id}]]"
+                if (chunk_id := _parse_optional_uuid(source.source_id))
+                else f"{source.document_name} ({source.record_id or source.reference_label or source.source_id})"
+            )
+            for source in effective_sources
+        }
+        triage_payload = convert_triage_analysis(
+            orchestrator_response.result,
+            source_references=source_references,
+        )
         return AgentPreparedResponse(
             session_id=session_uuid,
             selected_flow="triage",
@@ -806,16 +830,27 @@ class AgentIntegrationService:
             allowed_chunk_ids=allowed_chunk_ids,
         )
         filtered_chunk_ids = [
-            cid
-            for cid in prepared.citation_chunk_ids
-            if cid in authorized_chunk_ids
+            cid for cid in prepared.citation_chunk_ids if cid in authorized_chunk_ids
         ]
+
+        content = prepared.content
+        if prepared.triage and filtered_chunk_ids != prepared.citation_chunk_ids:
+            authorized_ids = set(filtered_chunk_ids)
+            references = {
+                source_id: f"[[fonte:{chunk_id}]]"
+                for source_id in prepared.provided_source_ids
+                if (chunk_id := _parse_optional_uuid(source_id)) in authorized_ids
+            }
+            content = format_triage_analysis(
+                prepared.triage.analysis,
+                source_references=references,
+            )
 
         if not commit:
             async with self.chat_repository.session.begin_nested():
                 return await self.chat_repository.add_message_with_citations(
                     session_id,
-                    prepared.content,
+                    content,
                     role=ChatMessageRole.AGENT,
                     chunk_ids=filtered_chunk_ids,
                     flow=prepared.selected_flow,
@@ -825,7 +860,7 @@ class AgentIntegrationService:
         try:
             message = await self.chat_repository.add_message_with_citations(
                 session_id,
-                prepared.content,
+                content,
                 role=ChatMessageRole.AGENT,
                 chunk_ids=filtered_chunk_ids,
                 flow=prepared.selected_flow,
@@ -862,7 +897,9 @@ class AgentIntegrationService:
         effective_sources = _dedupe_sources(
             provided_sources,
             original_request.sources if original_request is not None else None,
-            original_request.financial_records if original_request is not None else None,
+            original_request.financial_records
+            if original_request is not None
+            else None,
         )
         prepared = convert_orchestrator_response(
             orchestrator_response,

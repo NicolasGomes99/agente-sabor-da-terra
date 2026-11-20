@@ -82,6 +82,29 @@ describe('Chat citations display', () => {
     expect(items[2].textContent).toContain(secondCitation.label)
   })
 
+  it('links each finding to its exact saved excerpt', () => {
+    const contract = citation({
+      ...excerptCitation,
+      chunk_id: '54195469-bbb2-4eec-b71d-0e0104137395',
+      chunk_content: 'Cláusula de certificação',
+    })
+    const capacity = citation({
+      ...contract,
+      chunk_id: 'eb85bc6d-459e-49a7-880d-12cd59b477cf',
+      chunk_content: 'Limite semanal',
+    })
+    renderMessages([message({
+      content: `Certificação [[fonte:${contract.chunk_id}]]\nCapacidade [[fonte:${capacity.chunk_id}]]`,
+      citations: [capacity, contract],
+    })])
+
+    const targets = screen.getAllByRole('link', { name: contract.label }).map(
+      link => document.getElementById(link.getAttribute('href')?.slice(1) ?? ''),
+    )
+    expect(targets[0]?.textContent).toContain(contract.chunk_content)
+    expect(targets[1]?.textContent).toContain(capacity.chunk_content)
+  })
+
   it('does not show sources on user messages', () => {
     renderMessages([
       message({ role: 'user', citations: [recordCitation] }),

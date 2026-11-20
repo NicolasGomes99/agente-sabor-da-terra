@@ -39,7 +39,7 @@ _INSTRUCTION = """Extraia evidências documentais aplicáveis à solicitação. 
 Para cada evidência, use o source_id fornecido e copie um trecho literal contínuo que comprove todos os campos. Não invente dados.
 - Para contratos, selecione somente o contrato exato citado e as cláusulas aplicáveis. Preencha contract_reference e description. Use dap_caf para a cláusula que exige DAP ou CAF vigente. Um número de inscrição não comprova vigência.
 - Para certificação orgânica, use certificate com o produto da solicitação que consta na cobertura e as datas de início e término quando documentadas. Não use datas de outro documento. Para laudos e outros documentos, relate somente o que o trecho comprova, usando document.
-- Para capacidade, use capacity apenas com produto, quantidade, unidade, período (dia, semana, mês ou ano) e escopo documentados. Use o limite superior quando a fonte trouxer uma faixa. Só use estimativas aplicáveis ao período pedido, considerando eventuais restrições de safra. Nunca associe a capacidade de um produtor à capacidade global.
+- Para capacidade, use capacity apenas com produto, quantidade, unidade, período (dia, semana, mês ou ano) e escopo documentados. Use o limite superior quando a fonte trouxer uma faixa. Inclua a linha completa com as variantes de safra e entressafra e o escopo original. Só use estimativas aplicáveis ao período pedido. Nunca associe a capacidade de um produtor à capacidade global.
 - Para histórico de fornecimento, use history. Para documentação conflitante, use divergence com a descrição factual e cite cada trecho conflitante, em entradas separadas.
 - Não conclua disponibilidade atual com base em sazonalidade, capacidade ou histórico. Não sugira produtores. Não copie dados pessoais ou bancários nas descrições.
 - Para sazonalidade estruturada, o sistema cruza diretamente os meses de entrega com os registros de sazonalidade. Não gere evidências de sazonalidade.
@@ -109,6 +109,94 @@ def _matches_period(window: tuple[date, date] | None, period: str) -> bool:
     if period == "ano":
         return start == date(end.year, 1, 1) and end == date(end.year, 12, 31)
     return days == {"dia": 1, "semana": 7}.get(period)
+
+
+def _capacity_limitation(
+    evidence: TriageEvidence,
+    source: ConsultationSourceItem,
+    window: tuple[date, date] | None,
+) -> str | None:
+    product = _normalize(evidence.product or "")
+    scope = _normalize(evidence.scope or "")
+    amount = Decimal(str(evidence.amount))
+    unit = _normalize(evidence.unit or "")
+    period = _normalize(evidence.period or "")
+    rate = rf"(?<![\d.,])([0-9]+(?:[.,][0-9]+)?)\s*{re.escape(unit)}\s*(?:/|por\s+)\s*{re.escape(period)}\b"
+    content = _normalize(source.content)
+    excerpt = _normalize(evidence.excerpt)
+    lines = [_normalize(line) for line in source.content.splitlines() if line.strip()]
+    matches = []
+    months = "|".join(_MONTHS)
+    seasonal_range = rf"\s*\(safra\s+({months})\s*[-–]\s*({months})\)"
+    for index, line in enumerate(lines):
+        for match in re.finditer(rate, line):
+            value = Decimal(match[1].replace(",", "."))
+            qualifier = re.match(seasonal_range, line[match.end() :])
+            if value == amount and match[0] in excerpt:
+                matches.append((index, line, match, qualifier, False))
+            if qualifier:
+                off_season = re.match(
+                    rf"\s*,\s*~?([0-9]+(?:[.,][0-9]+)?)\s*{re.escape(unit)}"
+                    rf"(?:\s*(?:/|por\s+)\s*{re.escape(period)})?\s*\(entressafra\)",
+                    line[match.end() + qualifier.end() :],
+                )
+                if (
+                    off_season
+                    and Decimal(off_season[1].replace(",", ".")) == amount
+                    and match[0] in excerpt
+                    and off_season[0] in excerpt
+                ):
+                    matches.append((index, line, match, qualifier, True))
+    if len(matches) != 1:
+        return "não foi possível vincular a quantidade, a unidade e o período à mesma estimativa."
+
+    index, line, match, qualifier, off_season = matches[0]
+    preceding = lines[max(0, index - 2) : index]
+    context = " ".join([*preceding, line])
+    if not scope or not re.search(rf"\b{re.escape(scope)}\b", context):
+        return "o escopo da estimativa não foi comprovado."
+    product_lists = re.findall(
+        r"^produtos?\s*:\s*(.+)$", "\n".join(preceding), flags=re.MULTILINE
+    )
+    filename = source.document_name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    named_product = _normalize(filename.replace("_", " ").replace("-", " "))
+    inline_product = re.fullmatch(
+        rf"(?:produto\s*:\s*)?{re.escape(product)}[, :–-]+"
+        rf"{re.escape(scope)}[, :–-]+capacidade(?: estimada)?(?: de|:)?\s*~?",
+        line[: match.start()],
+    )
+    if (
+        any(entry.rstrip(".") != product for entry in product_lists)
+        or not (
+            inline_product
+            or product_lists
+            or (
+                named_product == product
+                and product in content
+                and line.startswith("capacidade:")
+            )
+        )
+        or re.search(r"\b(?:conjunto|grupo|mix|compartilhad\w*|combinad\w*)\b", context)
+    ):
+        return "a estimativa não comprova capacidade exclusiva para este produto."
+
+    if re.search(r"\b(?:safra|entressafra|sazonal\w*)\b", content):
+        if qualifier is None or window is None:
+            return "a restrição de safra ou entressafra precisa ser confirmada."
+        first, last = (_MONTHS.index(month) + 1 for month in qualifier.groups())
+        season = {
+            (first - 1 + offset) % 12 + 1 for offset in range((last - first) % 12 + 1)
+        }
+        if off_season:
+            season = set(range(1, 13)) - season
+        start, end = window
+        start_month = start.year * 12 + start.month - 1
+        end_month = end.year * 12 + end.month - 1
+        if any(
+            month % 12 + 1 not in season for month in range(start_month, end_month + 1)
+        ):
+            return "o período de entrega não está integralmente na janela sazonal da estimativa."
+    return None
 
 
 def _capacity_description(
@@ -325,6 +413,12 @@ def _evidence_findings(
     findings = []
     contract_found = False
     covered_products = set()
+    organic_requirements = [
+        (value, []) for value in analysis.extracted_data.general_conditions
+    ]
+    organic_requirements.extend(
+        (item.description, []) for item in analysis.extracted_data.requirements
+    )
     contract_code = _contract_code(contract or "")
     contract_sources = {
         source.source_id
@@ -381,6 +475,8 @@ def _evidence_findings(
                     follow_up = True
                 if description:
                     contract_found = True
+                if evidence.kind == "contract" and "organic" in _normalize(excerpt):
+                    organic_requirements.append((excerpt, [source.source_id]))
                 kind = "exigencia"
             case "certificate":
                 product = evidence.product or ""
@@ -400,39 +496,33 @@ def _evidence_findings(
                 covered_products.add(_normalize(product))
                 kind = "certificacao"
             case "capacity":
-                normalized_excerpt = _normalize(excerpt)
-                amount = (
-                    Decimal(str(evidence.amount))
-                    if evidence.amount is not None
-                    else None
-                )
-                numbers = {
-                    Decimal(token.replace(",", "."))
-                    for token in re.findall(
-                        r"[0-9]+(?:[.,][0-9]+)?", normalized_excerpt
-                    )
-                }
-                if (
-                    amount not in numbers
-                    or not evidence.product
-                    or _normalize(evidence.product)
-                    not in _normalize(f"{source.document_name} {source.content}")
-                    or not evidence.scope
-                    or _normalize(evidence.scope) not in normalized_excerpt
-                    or not evidence.unit
-                    or not evidence.period
-                    or not re.search(
-                        rf"\b{re.escape(_normalize(evidence.unit))}\s*(?:/|por\s+)\s*"
-                        rf"{re.escape(_normalize(evidence.period))}\b",
-                        normalized_excerpt,
+                if not all(
+                    (
+                        evidence.amount,
+                        evidence.product,
+                        evidence.scope,
+                        evidence.unit,
+                        evidence.period,
                     )
                 ):
                     continue
-                result = _capacity_description(evidence, analysis, window)
-                if result is None:
+                product = _normalize(evidence.product)
+                if not any(
+                    _normalize(item.product) == product
+                    for item in analysis.extracted_data.items
+                ):
                     continue
-                description, follow_up = result
-                kind = "capacidade_estimada"
+                limitation = _capacity_limitation(evidence, source, window)
+                if limitation:
+                    description = f"{evidence.product}: {limitation}"
+                    follow_up = True
+                    kind = "pendencia"
+                else:
+                    result = _capacity_description(evidence, analysis, window)
+                    if result is None:
+                        continue
+                    description, follow_up = result
+                    kind = "capacidade_estimada"
                 capacity_products.add(_normalize(evidence.product))
             case "history":
                 kind = "historico"
@@ -484,22 +574,51 @@ def _evidence_findings(
                     needs_follow_up=True,
                 )
             )
-        related_requirements = " ".join(
-            requirement.description
-            for requirement in analysis.extracted_data.requirements
-            if product in _normalize(requirement.description)
+    items = analysis.extracted_data.items
+    required = {
+        _normalize(item.product): []
+        for item in items
+        if "organic" in _normalize(f"{item.product} {item.condition_text or ''}")
+    }
+    for requirement, source_ids in organic_requirements:
+        normalized = _normalize(requirement)
+        if "organic" not in normalized:
+            continue
+        products = {
+            _normalize(item.product)
+            for item in items
+            if re.search(rf"\b{re.escape(_normalize(item.product))}\b", normalized)
+        }
+        all_products = re.search(
+            r"\b(?:todos? (?:os )?(?:produtos|itens)|toda (?:a )?(?:cesta|producao))\b(?!\s+organicos?\b)",
+            normalized,
         )
-        if (
-            "organic"
-            in _normalize(
-                f"{item.product} {item.condition_text or ''} {related_requirements}"
+        has_exceptions = re.search(
+            r"\b(?:exceto|salvo|quando|apenas|somente)\b", normalized
+        )
+        if all_products and not has_exceptions:
+            products.update(_normalize(item.product) for item in items)
+        elif has_exceptions and all_products:
+            products.clear()
+        if not products:
+            findings.append(
+                TriageDocumentFinding(
+                    kind="pendencia",
+                    description="Esclarecer quais produtos estão sujeitos à exigência de certificação orgânica.",
+                    source_ids=list(source_ids),
+                    needs_follow_up=True,
+                )
             )
-            and _normalize(item.product) not in covered_products
-        ):
+        for product in products:
+            required.setdefault(product, []).extend(source_ids)
+    for item in items:
+        product = _normalize(item.product)
+        if product in required and product not in covered_products:
             findings.append(
                 TriageDocumentFinding(
                     kind="pendencia",
                     description=f"{item.product}: falta comprovar cobertura e vigência da certificação orgânica.",
+                    source_ids=list(dict.fromkeys(required[product])),
                     needs_follow_up=True,
                 )
             )

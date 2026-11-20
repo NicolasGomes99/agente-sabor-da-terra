@@ -42,7 +42,17 @@ export function MessageList({
               {presentation.author}
             </span>
 
-            <p>{message.content}</p>
+            <p>{isAssistant ? message.content.split(/(\[\[fonte:[0-9a-f-]{36}\]\])/gi).map((part, partIndex) => {
+              const chunkId = /^\[\[fonte:([0-9a-f-]{36})\]\]$/i.exec(part)?.[1]
+              if (!chunkId) return part
+              const citation = message.citations?.find((source) => source.chunk_id === chunkId)
+              if (!citation) return 'Fonte indisponível'
+              return (
+                <a key={partIndex} href={`#fonte-${citation.message_id}-${citation.chunk_id}`}>
+                  {citation.label}
+                </a>
+              )
+            }) : message.content}</p>
 
             {isAssistant && <CitationList citations={message.citations} />}
           </article>

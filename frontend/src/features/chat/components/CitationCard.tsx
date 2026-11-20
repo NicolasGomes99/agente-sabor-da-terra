@@ -42,7 +42,7 @@ export function CitationCard({ citation }: { citation: Citation }) {
   }
 
   return (
-    <li className="citation-card">
+    <li id={`fonte-${citation.message_id}-${citation.chunk_id}`} className="citation-card">
       <div className="citation-card-header">
         <span className="citation-label">{citation.label}</span>
         <span className="citation-badge">
