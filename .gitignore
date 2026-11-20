@@ -19,6 +19,8 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+infra/config.local.json
+infra/*.local.json
 
 # Arquivos do sistema
 .DS_Store

@@ -1,0 +1,42 @@
+{
+  "project_id": "sabor-da-terra",
+  "region": "us-central1",
+  "billing_account_id": "XXXXXX-XXXXXX-XXXXXX",
+  "database": {
+    "instance_name": "sabor-da-terra-db",
+    "database_name": "sabor_da_terra",
+    "tier": "db-f1-micro",
+    "storage_size_gb": 10,
+    "backup_enabled": false,
+    "deletion_protection": true,
+    "admin_user": "postgres",
+    "migrator_user": "sabor_da_terra_migrator",
+    "application_user": "sabor_da_terra_app"
+  },
+  "artifacts": {
+    "repository_name": "sabor-da-terra"
+  },
+  "storage": {
+    "bucket_name": null
+  },
+  "cloud_run": {
+    "service_name": "sabor-da-terra-api",
+    "cpu": "1",
+    "memory": "512Mi",
+    "min_instances": 0,
+    "max_instances": 2,
+    "concurrency": 10,
+    "timeout_seconds": 300,
+    "billing": "request-based"
+  },
+  "inference": {
+    "mode": null,
+    "model": "gemini-3.8-flash",
+    "location": "global"
+  },
+  "budget": {
+    "currency": "USD",
+    "amount": 1.0,
+    "alert_thresholds": [0.5, 0.8, 1.0]
+  }
+}

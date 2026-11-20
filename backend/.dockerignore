@@ -1,0 +1,26 @@
+# Exclude everything by default
+**
+
+# Production dependencies
+!pyproject.toml
+!uv.lock
+!.python-version
+
+# Application source code
+!api/
+!api/**
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ruff_cache/
+
+# Environment and credentials
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*credentials*.json
+**/*service-account*.json
