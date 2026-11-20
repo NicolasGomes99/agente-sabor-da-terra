@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppShell } from '../../../components/layout/AppShell'
 import { ApiError } from '../../../lib/api-client'
 import { useAuth } from '../../auth/useAuth'
+import { OrderDraftPanel } from '../../orders/components/OrderDraftPanel'
 import { ChatHeader } from '../components/ChatHeader'
 import { ChatHistory } from '../components/ChatHistory'
 import { ChatInput } from '../components/ChatInput'
@@ -255,6 +256,10 @@ export function ChatPage() {
             <p>Carregando conversa...</p>
           ) : (
             <MessageList messages={conversation.messages} />
+          )}
+
+          {activeSessionId && (
+            <OrderDraftPanel scope={{ kind: 'chat', id: activeSessionId }} />
           )}
 
           <ChatInput

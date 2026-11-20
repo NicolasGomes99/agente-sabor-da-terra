@@ -1,9 +1,10 @@
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.chat_message import ChatMessage, ChatMessageRole
+from ..models.chat_message import ChatMessage, ChatMessageFlow, ChatMessageRole
 from ..models.chat_session import ChatSession
 from ..models.solicitation import Solicitation
 from .chat import ChatRepository
@@ -23,14 +24,29 @@ class SolicitationRepository:
         await self.session.flush()
         return chat
 
-    async def get_session(self, session_id: UUID) -> ChatSession | None:
-        return await self.session.get(ChatSession, session_id)
+    async def get_session(
+        self,
+        session_id: UUID,
+        *,
+        lock: bool = False,
+    ) -> ChatSession | None:
+        statement = (
+            select(ChatSession)
+            .where(ChatSession.id == session_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock:
+            statement = statement.with_for_update(of=ChatSession)
+        return await self.session.scalar(statement)
 
     async def list_all(self) -> list[Solicitation]:
         statement = (
             select(Solicitation)
             .join(ChatSession, Solicitation.session_id == ChatSession.id)
-            .order_by(ChatSession.created_at.desc(), Solicitation.id.desc())
+            .order_by(
+                ChatSession.created_at.desc(),
+                Solicitation.id.desc(),
+            )
         )
         return list((await self.session.scalars(statement)).all())
 
@@ -40,7 +56,11 @@ class SolicitationRepository:
         *,
         lock: bool = False,
     ) -> Solicitation | None:
-        statement = select(Solicitation).where(Solicitation.id == solicitation_id)
+        statement = (
+            select(Solicitation)
+            .where(Solicitation.id == solicitation_id)
+            .execution_options(populate_existing=True)
+        )
         if lock:
             statement = statement.with_for_update()
         return await self.session.scalar(statement)
@@ -51,11 +71,15 @@ class SolicitationRepository:
         content: str,
         *,
         role: ChatMessageRole = ChatMessageRole.USER,
+        flow: ChatMessageFlow | str | None = None,
+        reference_received_at: datetime | date | str | None = None,
     ) -> ChatMessage:
         return await self.chat_repository.add_message(
             session_id,
             content,
             role=role,
+            flow=flow,
+            reference_received_at=reference_received_at,
         )
 
     async def list_messages(self, session_id: UUID) -> list[ChatMessage]:
