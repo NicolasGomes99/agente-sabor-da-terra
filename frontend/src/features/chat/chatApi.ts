@@ -2,9 +2,9 @@
 import { apiRequest } from '../../lib/api-client'
 
 import type {
-  ChatMessage,
   ChatSession,
   ChatSessionDetail,
+  ChatTurnResponse,
   CreateMessagePayload,
 } from './types'
 
@@ -31,12 +31,17 @@ export function getChatSession(
 export function sendChatMessage(
   sessionId: string,
   payload: CreateMessagePayload,
-): Promise<ChatMessage> {
-  return apiRequest<ChatMessage>(
+  signal?: AbortSignal,
+): Promise<ChatTurnResponse> {
+  const options: RequestInit = {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }
+  if (signal !== undefined) {
+    options.signal = signal
+  }
+  return apiRequest<ChatTurnResponse>(
     `/chat/sessions/${sessionId}/messages`,
-    {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    },
+    options,
   )
 }

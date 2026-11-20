@@ -98,17 +98,27 @@ describe('triage API', () => {
   })
 
   it('sends a clarification as authenticated JSON', async () => {
-    fetchMock.mockResolvedValueOnce(Response.json(message, { status: 201 }))
+    const turn = {
+      operation_id: 'op-triage-1',
+      selected_flow: 'triage',
+      user_message: message,
+      assistant_message: { ...message, id: 'message-b', role: 'assistant', content: 'Análise atualizada' },
+      solicitation,
+    }
+    fetchMock.mockResolvedValueOnce(Response.json(turn, { status: 201 }))
 
     await expect(
-      sendSolicitationMessage(solicitation.id, { content: message.content }),
-    ).resolves.toEqual(message)
+      sendSolicitationMessage(solicitation.id, {
+        content: message.content,
+        operation_id: 'op-triage-1',
+      }),
+    ).resolves.toEqual(turn)
 
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       `${baseUrl}/solicitations/solicitation%2Fa/messages`,
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ content: message.content }),
+        body: JSON.stringify({ content: message.content, operation_id: 'op-triage-1' }),
       }),
     )
     const headers = new Headers(fetchMock.mock.calls[0][1]?.headers)

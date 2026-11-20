@@ -29,6 +29,16 @@ export interface SolicitationSession extends Solicitation {
 
 export interface SolicitationMessagePayload {
   content: string
+  operation_id?: string
+  retry?: boolean
+}
+
+export interface SolicitationTurnResponse {
+  operation_id: string
+  selected_flow: 'triage' | 'consultation'
+  user_message: ChatMessage
+  assistant_message: ChatMessage
+  solicitation: Solicitation
 }
 
 export const solicitationStatusLabels: Record<SolicitationStatus, string> = {

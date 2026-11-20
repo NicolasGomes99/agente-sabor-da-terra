@@ -7,7 +7,13 @@ import { OrderDraftPanel } from '../../orders/components/OrderDraftPanel'
 import { ChatHeader } from '../components/ChatHeader'
 import { ChatHistory } from '../components/ChatHistory'
 import { ChatInput } from '../components/ChatInput'
+import { ConversationStatusBanner } from '../components/ConversationStatusBanner'
 import { MessageList } from '../components/MessageList'
+import {
+  PROCESSING_DELAY_WARNING_MS,
+  createOperationId,
+  extractExecutionFailure,
+} from '../conversationOperation'
 import {
   createChatSession,
   getChatSession,
@@ -18,20 +24,32 @@ import type { ChatMessage, ChatSession } from '../types'
 
 import './chat.css'
 
+type PendingOperation = {
+  operationId: string
+  content: string
+  persistedOnServer: boolean
+}
+
 type ConversationState = {
   messages: ChatMessage[]
   loading: boolean
   sending: boolean
+  delayed: boolean
   loadError: string | null
   sendError: string | null
+  pendingOperation: PendingOperation | null
+  clearInputCount: number
 }
 
 const emptyConversation: ConversationState = {
   messages: [],
   loading: false,
   sending: false,
+  delayed: false,
   loadError: null,
   sendError: null,
+  pendingOperation: null,
+  clearInputCount: 0,
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -62,6 +80,10 @@ export function ChatPage() {
   const selectionRevision = useRef(0)
   const createInProgress = useRef(false)
   const pendingSends = useRef(new Set<string>())
+  const sendTokens = useRef(new Map<string, number>())
+  const sendControllers = useRef(new Map<string, AbortController>())
+  const delayTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const pendingOperationsRef = useRef(new Map<string, PendingOperation>())
   const confirmedMessages = useRef(new Map<string, ChatMessage[]>())
 
   const updateConversation = useCallback((
@@ -73,15 +95,35 @@ export function ChatPage() {
     }))
   }, [])
 
+  const clearDelayTimer = useCallback((sessionId: string) => {
+    const timer = delayTimers.current.get(sessionId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      delayTimers.current.delete(sessionId)
+    }
+  }, [])
+
+  const abortAllSends = useCallback(() => {
+    for (const controller of sendControllers.current.values()) {
+      controller.abort()
+    }
+    sendControllers.current.clear()
+    for (const timer of delayTimers.current.values()) {
+      clearTimeout(timer)
+    }
+    delayTimers.current.clear()
+  }, [])
+
   const expireSession = useCallback((error: unknown, lifetime: AbortController) => {
     if (error instanceof ApiError && error.status === 401) {
       lifetime.abort()
       messageRead.current?.abort()
+      abortAllSends()
       logout()
       return true
     }
     return false
-  }, [logout])
+  }, [abortAllSends, logout])
 
   const selectSession = useCallback(async (sessionId: string) => {
     const lifetime = pageLifetime.current
@@ -152,8 +194,9 @@ export function ChatPage() {
     return () => {
       lifetime.abort()
       messageRead.current?.abort()
+      abortAllSends()
     }
-  }, [expireSession, selectSession])
+  }, [abortAllSends, expireSession, selectSession])
 
   async function handleCreateSession() {
     const lifetime = pageLifetime.current
@@ -187,48 +230,178 @@ export function ChatPage() {
     }
   }
 
-  async function handleSendMessage(content: string) {
+  async function executeSend(
+    sessionId: string,
+    content: string,
+    operationId: string,
+    retry: boolean,
+  ): Promise<void> {
     const lifetime = pageLifetime.current
-    const sessionId = activeSessionId
-    if (!lifetime || lifetime.signal.aborted || !sessionId ||
-      pendingSends.current.has(sessionId)) return
+    if (!lifetime || lifetime.signal.aborted) return
 
+    if (retry) {
+      sendControllers.current.get(sessionId)?.abort()
+    } else if (pendingSends.current.has(sessionId)) {
+      return
+    }
+
+    const token = (sendTokens.current.get(sessionId) ?? 0) + 1
+    sendTokens.current.set(sessionId, token)
+    const controller = new AbortController()
+    sendControllers.current.set(sessionId, controller)
     pendingSends.current.add(sessionId)
-    updateConversation(sessionId, { sending: true, sendError: null })
+
+    const existingPending = pendingOperationsRef.current.get(sessionId)
+    const currentOperation: PendingOperation = {
+      operationId,
+      content,
+      persistedOnServer: existingPending?.operationId === operationId
+        ? existingPending.persistedOnServer
+        : false,
+    }
+    pendingOperationsRef.current.set(sessionId, currentOperation)
+
+    clearDelayTimer(sessionId)
+    const timer = setTimeout(() => {
+      if (
+        !lifetime.signal.aborted &&
+        sendTokens.current.get(sessionId) === token
+      ) {
+        updateConversation(sessionId, { delayed: true })
+      }
+    }, PROCESSING_DELAY_WARNING_MS)
+    delayTimers.current.set(sessionId, timer)
+
+    updateConversation(sessionId, {
+      sending: true,
+      delayed: false,
+      sendError: null,
+      pendingOperation: currentOperation,
+    })
+
+    const isCurrentAttempt = () =>
+      !lifetime.signal.aborted && sendTokens.current.get(sessionId) === token
 
     try {
-      const message = await sendChatMessage(sessionId, { content })
-      if (lifetime.signal.aborted) return
+      const payload = retry
+        ? { content, operation_id: operationId, retry: true }
+        : { content, operation_id: operationId }
+      const turn = await sendChatMessage(sessionId, payload, controller.signal)
+      if (!isCurrentAttempt()) return
 
+      const newMessages = [turn.user_message, turn.assistant_message]
       confirmedMessages.current.set(sessionId, uniqueById([
-        ...(confirmedMessages.current.get(sessionId) ?? []), message,
+        ...(confirmedMessages.current.get(sessionId) ?? []),
+        ...newMessages,
       ]))
+      pendingOperationsRef.current.delete(sessionId)
+
       setConversations((current) => {
         const conversation = current[sessionId] ?? emptyConversation
         return {
           ...current,
           [sessionId]: {
             ...conversation,
-            messages: sortMessages(uniqueById([...conversation.messages, message])),
+            messages: sortMessages(uniqueById([
+              ...conversation.messages,
+              ...newMessages,
+            ])),
+            pendingOperation: null,
+            sendError: null,
+            delayed: false,
+            clearInputCount: conversation.clearInputCount + 1,
           },
         }
       })
     } catch (error) {
-      if (!lifetime.signal.aborted && !expireSession(error, lifetime)) {
-        updateConversation(sessionId, {
-          sendError: 'Não foi possível enviar a mensagem.',
-        })
+      if (!isCurrentAttempt()) return
+      if (expireSession(error, lifetime)) return
+
+      const failure = extractExecutionFailure(error)
+      const persistedUserMsg = failure.userMessage
+      const resolvedOperationId = failure.operationId ?? operationId
+      const updatedPending: PendingOperation = {
+        operationId: resolvedOperationId,
+        content,
+        persistedOnServer: Boolean(persistedUserMsg) || currentOperation.persistedOnServer,
       }
+      pendingOperationsRef.current.set(sessionId, updatedPending)
+
+      if (persistedUserMsg) {
+        confirmedMessages.current.set(sessionId, uniqueById([
+          ...(confirmedMessages.current.get(sessionId) ?? []),
+          persistedUserMsg,
+        ]))
+        setConversations((current) => {
+          const conversation = current[sessionId] ?? emptyConversation
+          return {
+            ...current,
+            [sessionId]: {
+              ...conversation,
+              messages: sortMessages(uniqueById([
+                ...conversation.messages,
+                persistedUserMsg,
+              ])),
+              sendError:
+                failure.detail ??
+                'Não foi possível obter resposta do assistente. Tente novamente.',
+              pendingOperation: updatedPending,
+              delayed: false,
+              clearInputCount: conversation.clearInputCount + 1,
+            },
+          }
+        })
+        return
+      }
+
+      updateConversation(sessionId, {
+        sendError: failure.detail ?? 'Não foi possível enviar a mensagem.',
+        pendingOperation: updatedPending,
+        delayed: false,
+      })
       throw error
     } finally {
-      pendingSends.current.delete(sessionId)
-      if (!lifetime.signal.aborted) updateConversation(sessionId, { sending: false })
+      if (sendTokens.current.get(sessionId) === token) {
+        clearDelayTimer(sessionId)
+        sendControllers.current.delete(sessionId)
+        pendingSends.current.delete(sessionId)
+        if (!lifetime.signal.aborted) {
+          updateConversation(sessionId, { sending: false, delayed: false })
+        }
+      }
     }
+  }
+
+  async function handleSendMessage(content: string) {
+    const sessionId = activeSessionId
+    if (!sessionId) return
+    const existing = pendingOperationsRef.current.get(sessionId)
+    const reuseFailedDraft =
+      existing !== undefined &&
+      !existing.persistedOnServer &&
+      existing.content === content
+    const operationId = reuseFailedDraft ? existing.operationId : createOperationId()
+    await executeSend(sessionId, content, operationId, reuseFailedDraft)
+  }
+
+  function handleRetryActiveSession() {
+    const sessionId = activeSessionId
+    if (!sessionId) return
+    const pending = pendingOperationsRef.current.get(sessionId)
+    if (!pending) return
+    void executeSend(
+      sessionId,
+      pending.content,
+      pending.operationId,
+      true,
+    ).catch(() => {
+      // Estado de erro já apresentado pelo ConversationStatusBanner.
+    })
   }
 
   const conversation = (activeSessionId && conversations[activeSessionId]) || emptyConversation
   const loading = conversation.loading || (!activeSessionId && (listing || creating))
-  const errors = [listError, createError, conversation.loadError, conversation.sendError]
+  const errors = [listError, createError, conversation.loadError]
 
   return (
     <AppShell>
@@ -258,12 +431,20 @@ export function ChatPage() {
             <MessageList messages={conversation.messages} />
           )}
 
+          <ConversationStatusBanner
+            sending={conversation.sending}
+            delayed={conversation.delayed}
+            error={conversation.sendError}
+            canRetry={conversation.pendingOperation !== null}
+            onRetry={handleRetryActiveSession}
+          />
+
           {activeSessionId && (
             <OrderDraftPanel scope={{ kind: 'chat', id: activeSessionId }} />
           )}
 
           <ChatInput
-            key={activeSessionId ?? 'no-session'}
+            key={`${activeSessionId ?? 'no-session'}-${conversation.clearInputCount}`}
             onSend={handleSendMessage}
             disabled={!activeSessionId || loading || conversation.sending}
           />

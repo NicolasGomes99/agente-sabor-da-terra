@@ -1,10 +1,10 @@
 import { apiRequest } from '../../lib/api-client'
-import type { ChatMessage } from '../chat/types'
 
 import type {
   Solicitation,
   SolicitationMessagePayload,
   SolicitationSession,
+  SolicitationTurnResponse,
 } from './types'
 
 export function listSolicitations(
@@ -36,13 +36,18 @@ export function openSolicitationSession(
 export function sendSolicitationMessage(
   solicitationId: string,
   payload: SolicitationMessagePayload,
-): Promise<ChatMessage> {
-  return apiRequest<ChatMessage>(
+  signal?: AbortSignal,
+): Promise<SolicitationTurnResponse> {
+  const options: RequestInit = {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }
+  if (signal !== undefined) {
+    options.signal = signal
+  }
+  return apiRequest<SolicitationTurnResponse>(
     `/solicitations/${encodeURIComponent(solicitationId)}/messages`,
-    {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    },
+    options,
   )
 }
 
