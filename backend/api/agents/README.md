@@ -57,3 +57,7 @@ A função assíncrona **`orchestrate_request`** é o ponto de entrada oficial d
 | `selected_agent` | `Literal["triage_agent", "consultation_agent"]` | Nome do agente especialista acionado. |
 | `result` | `TriageAnalysis \| ConsultationResponse` | Saída estruturada e validada do especialista (`TriageAnalysis` em `api.agents.triage.schemas` ou `ConsultationResponse` em `api.agents.consultation.schemas`). |
 | `session_history` | `list[ConversationTurn]` | Histórico atualizado da sessão atual (preservando `received_at` e `flow` por turno). |
+
+## Rascunhos de pedidos na triagem
+
+A #15 disponibiliza `prepare_order_draft` para converter uma análise existente e `analyze_order_draft` para executar a triagem e preparar o rascunho no contrato `OrderDraftData` da #10. Consulte [Rascunhos de pedidos na triagem](../../../docs/rascunhos-triagem.md) para conhecer os parâmetros, as pendências e os testes do cenário compartilhado.
