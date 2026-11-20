@@ -18,6 +18,7 @@ from .repositories.chat import ChatRepository
 from .repositories.document import DocumentRepository
 from .repositories.lot import LotRepository
 from .repositories.order import OrderRepository
+from .repositories.order_draft import OrderDraftRepository
 from .repositories.producer import ProducerRepository
 from .repositories.product import ProductRepository
 from .repositories.solicitation import SolicitationRepository
@@ -27,6 +28,7 @@ from .services.chat import ChatService
 from .services.document import DocumentService
 from .services.lot import LotService
 from .services.order import OrderService
+from .services.order_draft import OrderDraftService
 from .services.producer import ProducerService
 from .services.product import ProductService
 from .services.solicitation import SolicitationService
@@ -150,3 +152,16 @@ def get_solicitation_service(
 ) -> SolicitationService:
     return SolicitationService(SolicitationRepository(session))
 
+
+def get_order_draft_service(
+    session: Annotated[AsyncSession, Depends(get_db, scope="function")],
+) -> OrderDraftService:
+    return OrderDraftService(
+        repository=OrderDraftRepository(session),
+        order_service=OrderService(
+            OrderRepository(session),
+            ProductRepository(session),
+        ),
+        chat_repository=ChatRepository(session),
+        solicitation_repository=SolicitationRepository(session),
+    )
