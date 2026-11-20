@@ -29,7 +29,10 @@ class SolicitationRepository:
         session_id: UUID,
         *,
         lock: bool = False,
+        share_lock: bool = False,
     ) -> ChatSession | None:
+        if lock and share_lock:
+            raise ValueError("Cannot acquire both exclusive and shared locks.")
         statement = (
             select(ChatSession)
             .where(ChatSession.id == session_id)
@@ -37,6 +40,8 @@ class SolicitationRepository:
         )
         if lock:
             statement = statement.with_for_update(of=ChatSession)
+        elif share_lock:
+            statement = statement.with_for_update(read=True, of=ChatSession)
         return await self.session.scalar(statement)
 
     async def list_all(self) -> list[Solicitation]:

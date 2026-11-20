@@ -34,7 +34,6 @@ export interface RecoverableOperation {
   user_message_id: string
   content: string
   attempt: number
-  error_detail: string | null
   created_at: string
   updated_at: string
 }

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ from ..agents import OrchestratorRequest, OrchestratorResponse, orchestrate_requ
 from ..agents.config import PERNAMBUCO_TIMEZONE
 from ..models.chat_message import ChatMessage, ChatMessageRole
 from ..models.chat_operation import ChatOperation, ChatOperationStatus
+from ..models.chat_session import ChatSession
 from ..models.solicitation import Solicitation, SolicitationStatus
 from ..repositories.chat import ChatRepository
 from ..repositories.chat_operation import ChatOperationRepository
@@ -29,6 +31,8 @@ from .agent_integration import (
     convert_orchestrator_response,
     document_chunks_to_source_items,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STALE_PROCESSING_SECONDS = 60.0
 DEFAULT_IN_FLIGHT_WAIT_SECONDS = 15.0
@@ -152,6 +156,22 @@ class PersistedDocumentSourceProvider:
 
 
 @dataclass(frozen=True)
+class FreeChatSessionState:
+    session: ChatSession
+    messages: list[ChatMessage]
+    recoverable_operation: tuple[ChatOperation, ChatMessage] | None = None
+
+
+@dataclass(frozen=True)
+class TriageSessionState:
+    solicitation: Solicitation
+    session: ChatSession
+    messages: list[ChatMessage]
+    read_only: bool
+    recoverable_operation: tuple[ChatOperation, ChatMessage] | None = None
+
+
+@dataclass(frozen=True)
 class ConversationTurnResult:
     operation_id: str
     selected_flow: Literal["triage", "consultation"]
@@ -233,6 +253,89 @@ class ConversationService:
         self._clock = clock or (lambda: datetime.now(PERNAMBUCO_TIMEZONE))
         self.stale_processing_seconds = stale_processing_seconds
         self.in_flight_wait_seconds = in_flight_wait_seconds
+
+    async def get_free_chat_session(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+    ) -> FreeChatSessionState:
+        """Recupera sessão privada, histórico e operação pendente de forma consistente."""
+        chat = await self.chat_repository.get_session(
+            session_id,
+            user_id,
+            share_lock=True,
+        )
+        if chat is None:
+            raise ConversationSessionNotFoundError("Sessão não encontrada.")
+
+        try:
+            messages = await self.chat_repository.list_messages(chat.id)
+            recoverable = await self.get_recoverable_operation(
+                chat.id,
+                messages=messages,
+            )
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+
+        return FreeChatSessionState(
+            session=chat,
+            messages=messages,
+            recoverable_operation=recoverable,
+        )
+
+    async def open_triage_session(
+        self,
+        solicitation_id: UUID,
+    ) -> TriageSessionState:
+        """Abre sessão da triagem recuperando cartão, histórico e operação pendente na mesma transação."""
+        # Ordem canônica de locks: solicitação -> sessão (compatível com
+        # _lock_and_validate_target, _phase3_commit_result, _mark_failed_if_current,
+        # SolicitationService.finalize e OrderDraftService).
+        solicitation = await self.solicitation_repository.get_by_id(
+            solicitation_id,
+            lock=True,
+        )
+        if solicitation is None:
+            raise ConversationSessionNotFoundError("Solicitação não encontrada.")
+
+        read_only = solicitation.status == SolicitationStatus.FINISHED
+        if solicitation.status == SolicitationStatus.RECEIVED:
+            solicitation.status = SolicitationStatus.IN_REVIEW
+
+        try:
+            chat = await self.solicitation_repository.get_session(
+                solicitation.session_id,
+                share_lock=True,
+            )
+            if chat is None or chat.user_id is not None:
+                await self.session.rollback()
+                raise ConversationSessionNotFoundError("Sessão não encontrada.")
+
+            messages = await self.chat_repository.list_messages(chat.id)
+            recoverable = (
+                None
+                if read_only
+                else await self.get_recoverable_operation(
+                    chat.id,
+                    messages=messages,
+                )
+            )
+            await self.session.commit()
+        except ConversationSessionNotFoundError:
+            raise
+        except Exception:
+            await self.session.rollback()
+            raise
+
+        return TriageSessionState(
+            solicitation=solicitation,
+            session=chat,
+            messages=messages,
+            read_only=read_only,
+            recoverable_operation=recoverable,
+        )
 
     async def get_recoverable_operation(
         self,
@@ -334,6 +437,12 @@ class ConversationService:
                     original_request=request,
                 )
             except Exception as error:
+                logger.exception(
+                    "Conversation turn execution failed (session_id=%s, operation_key=%s, attempt=%s)",
+                    started.session_id,
+                    started.operation_key,
+                    started.attempt,
+                )
                 is_stale = await self._mark_failed_if_current(
                     started,
                     error_detail=str(error)[:500] or type(error).__name__,
@@ -818,6 +927,12 @@ class ConversationService:
         ):
             raise
         except Exception as error:
+            logger.exception(
+                "Conversation turn persistence failed (session_id=%s, operation_key=%s, attempt=%s)",
+                started.session_id,
+                started.operation_key,
+                started.attempt,
+            )
             await self.session.rollback()
             await self._mark_failed_if_current(
                 started,
@@ -908,5 +1023,10 @@ class ConversationService:
             await self.session.commit()
             return False
         except SQLAlchemyError:
+            logger.exception(
+                "Failed to persist failed status for operation (session_id=%s, operation_key=%s)",
+                started.session_id,
+                started.operation_key,
+            )
             await self.session.rollback()
             return False

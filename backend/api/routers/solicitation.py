@@ -87,33 +87,25 @@ async def get_solicitation(
 )
 async def open_solicitation_session(
     solicitation_id: UUID,
-    service: Service,
     conversation_service: Conversation,
 ) -> SolicitationSessionOut:
     try:
-        solicitation, chat, messages, read_only = (
-            await service.open_session(solicitation_id)
-        )
-    except SolicitationNotFoundError as error:
+        state = await conversation_service.open_triage_session(solicitation_id)
+    except ConversationSessionNotFoundError as error:
         raise _not_found() from error
 
-    recoverable = (
-        None
-        if read_only
-        else await conversation_service.get_recoverable_operation(
-            chat.id,
-            messages=messages,
-        )
-    )
     return SolicitationSessionOut(
-        **SolicitationOut.model_validate(solicitation).model_dump(),
-        title=chat.title,
-        created_at=chat.created_at,
-        read_only=read_only,
-        messages=[MessageOut.model_validate(message) for message in messages],
+        **SolicitationOut.model_validate(state.solicitation).model_dump(),
+        title=state.session.title,
+        created_at=state.session.created_at,
+        read_only=state.read_only,
+        messages=[MessageOut.model_validate(message) for message in state.messages],
         pending_operation=(
-            RecoverableOperationOut.from_operation(recoverable[0], recoverable[1])
-            if recoverable is not None
+            RecoverableOperationOut.from_operation(
+                state.recoverable_operation[0],
+                state.recoverable_operation[1],
+            )
+            if state.recoverable_operation is not None
             else None
         ),
     )

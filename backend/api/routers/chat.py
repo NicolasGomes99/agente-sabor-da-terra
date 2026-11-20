@@ -18,7 +18,7 @@ from ..schemas.chat import (
     SessionDetail,
     SessionOut,
 )
-from ..services.chat import ChatService, SessionNotFoundError
+from ..services.chat import ChatService
 from ..services.conversation import (
     ConversationExecutionError,
     ConversationOperationConflictError,
@@ -58,26 +58,25 @@ async def list_sessions(user: CurrentUser, service: Service) -> list[SessionOut]
 async def get_session(
     session_id: UUID,
     user: CurrentUser,
-    service: Service,
     conversation_service: Conversation,
 ) -> SessionDetail:
     try:
-        chat, messages = await service.get_session_with_messages(
-            session_id, user.id
+        state = await conversation_service.get_free_chat_session(
+            session_id,
+            user.id,
         )
-    except SessionNotFoundError as error:
+    except ConversationSessionNotFoundError as error:
         raise _not_found() from error
 
-    recoverable = await conversation_service.get_recoverable_operation(
-        chat.id,
-        messages=messages,
-    )
     return SessionDetail(
-        **SessionOut.model_validate(chat).model_dump(),
-        messages=[MessageOut.model_validate(m) for m in messages],
+        **SessionOut.model_validate(state.session).model_dump(),
+        messages=[MessageOut.model_validate(m) for m in state.messages],
         pending_operation=(
-            RecoverableOperationOut.from_operation(recoverable[0], recoverable[1])
-            if recoverable is not None
+            RecoverableOperationOut.from_operation(
+                state.recoverable_operation[0],
+                state.recoverable_operation[1],
+            )
+            if state.recoverable_operation is not None
             else None
         ),
     )

@@ -122,7 +122,6 @@ class RecoverableOperationOut(BaseModel):
     user_message_id: UUID
     content: str
     attempt: int
-    error_detail: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -143,7 +142,6 @@ class RecoverableOperationOut(BaseModel):
             user_message_id=user_message.id,
             content=user_message.content,
             attempt=operation.attempt,
-            error_detail=operation.error_detail,
             created_at=operation.created_at,
             updated_at=operation.updated_at,
         )

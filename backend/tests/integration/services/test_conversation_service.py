@@ -63,6 +63,7 @@ from api.schemas.agent_integration import (
     PreparedTriageContext,
 )
 from api.schemas.solicitation import SolicitationCreate
+from api.services.agent_integration import AgentIntegrationService
 from api.services.auth import AuthService
 from api.services.conversation import (
     ConversationExecutionError,
@@ -1671,3 +1672,554 @@ async def test_recoverable_operations_exposed_on_reopen_and_retried_without_dupl
     ).json()
     assert finalized_open["read_only"] is True
     assert finalized_open["pending_operation"] is None
+
+
+@pytest.mark.asyncio
+async def test_recoverable_operation_does_not_expose_internal_error_detail_via_api(
+    db_session: AsyncSession,
+    api_client: httpx.AsyncClient,
+) -> None:
+    # Correção 2 do review da #51:
+    # Detalhes internos das exceções devem ficar restritos ao diagnóstico interno
+    # (banco/logs) e nunca ser expostos pelo contrato público da API.
+    _, headers = await _create_user_headers(db_session)
+    internal_secret_error = (
+        "FATAL: password authentication failed for internal-db.corp:5432 "
+        "api_key=sk-secret-diagnostic-999"
+    )
+
+    async def failing_orchestrator(
+        _request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        raise RuntimeError(internal_secret_error)
+
+    app.dependency_overrides[get_agent_orchestrator] = lambda: failing_orchestrator
+
+    # 1) Chat livre
+    free_session_id = (
+        await api_client.post("/chat/sessions", headers=headers)
+    ).json()["id"]
+    free_502 = await api_client.post(
+        f"/chat/sessions/{free_session_id}/messages",
+        headers=headers,
+        json={
+            "content": "Consulta que dispara erro interno",
+            "operation_id": "op-internal-err-free",
+        },
+    )
+    assert free_502.status_code == 502
+    for leaked in ("internal-db.corp", "sk-secret-diagnostic-999", "password authentication"):
+        assert leaked not in free_502.text
+
+    reopened_free = await api_client.get(
+        f"/chat/sessions/{free_session_id}",
+        headers=headers,
+    )
+    assert reopened_free.status_code == 200
+    reopened_free_body = reopened_free.json()
+    free_pending = reopened_free_body["pending_operation"]
+    assert free_pending is not None
+    assert free_pending["operation_id"] == "op-internal-err-free"
+    assert free_pending["status"] == "failed"
+    assert "error_detail" not in free_pending
+    for leaked in ("internal-db.corp", "sk-secret-diagnostic-999", "password authentication"):
+        assert leaked not in reopened_free.text
+
+    # Detalhe interno preservado exclusivamente no banco para diagnóstico
+    free_op = await ChatOperationRepository(db_session).get_by_key(
+        UUID(free_session_id),
+        "op-internal-err-free",
+    )
+    assert free_op is not None
+    assert free_op.error_detail == internal_secret_error
+
+    # 2) Chat da triagem
+    sol_resp = await api_client.post(
+        "/solicitations",
+        headers=headers,
+        json=_ped_2026_003_payload(),
+    )
+    assert sol_resp.status_code == 201
+    solicitation_id = sol_resp.json()["id"]
+    triage_session_id = UUID(sol_resp.json()["session_id"])
+
+    triage_502 = await api_client.post(
+        f"/solicitations/{solicitation_id}/messages",
+        headers=headers,
+        json={
+            "content": "Esclarecimento que dispara erro interno",
+            "operation_id": "op-internal-err-triage",
+        },
+    )
+    assert triage_502.status_code == 502
+    for leaked in ("internal-db.corp", "sk-secret-diagnostic-999", "password authentication"):
+        assert leaked not in triage_502.text
+
+    reopened_triage = await api_client.post(
+        f"/solicitations/{solicitation_id}/open",
+        headers=headers,
+    )
+    assert reopened_triage.status_code == 200
+    triage_pending = reopened_triage.json()["pending_operation"]
+    assert triage_pending is not None
+    assert triage_pending["operation_id"] == "op-internal-err-triage"
+    assert triage_pending["status"] == "failed"
+    assert "error_detail" not in triage_pending
+    for leaked in ("internal-db.corp", "sk-secret-diagnostic-999", "password authentication"):
+        assert leaked not in reopened_triage.text
+
+    triage_op = await ChatOperationRepository(db_session).get_by_key(
+        triage_session_id,
+        "op-internal-err-triage",
+    )
+    assert triage_op is not None
+    assert triage_op.error_detail == internal_secret_error
+
+
+@pytest.mark.asyncio
+async def test_free_chat_recovery_stays_consistent_when_operation_completes_concurrently(
+    real_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Correção 1 do review da #51 (concorrência real no PostgreSQL):
+    # GET /chat/sessions/{session_id} nunca pode retornar histórico sem a resposta do
+    # assistente junto com pending_operation = None quando a operação conclui durante
+    # a recuperação da conversa.
+    monkeypatch.setenv("JWT_SECRET_KEY", TEST_SECRET_KEY)
+    monkeypatch.setattr(database, "get_session_maker", lambda: real_session_factory)
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        async with real_session_factory() as session:
+            yield session
+
+    async with real_session_factory() as setup_session:
+        user_repo = UserRepository(setup_session)
+        auth_service = AuthService(UserService(user_repo), secret_key=TEST_SECRET_KEY)
+        user = await user_repo.create(
+            f"race-free-{uuid4()}@example.com",
+            auth_service.hash_password("password"),
+        )
+        headers = {"Authorization": f"Bearer {auth_service.create_access_token(user.id)}"}
+        user_id = user.id
+        await setup_session.commit()
+
+    agent_started = asyncio.Event()
+    release_agent = asyncio.Event()
+    reply_counter = 0
+
+    async def controlled_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        nonlocal reply_counter
+        reply_counter += 1
+        current = reply_counter
+        agent_started.set()
+        await release_agent.wait()
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="consultation",
+            selected_agent="consultation_agent",
+            result=ConsultationResponse(
+                answer=f"Resposta concluída #{current}.",
+                reference_date_used="2026-11-19",
+                source_ids=[],
+                cited_sources=[],
+                gaps_and_divergences=[],
+                has_sufficient_data=True,
+            ),
+        )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_agent_orchestrator] = lambda: controlled_orchestrator
+    transport = httpx.ASGITransport(app=app)
+    session_id: UUID | None = None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post("/chat/sessions", headers=headers)
+            assert created.status_code == 201
+            session_id = UUID(created.json()["id"])
+
+            # --- Cenário A: conclusão disparada entre list_messages e get_recoverable_operation ---
+            send_task_1 = asyncio.create_task(
+                client.post(
+                    f"/chat/sessions/{session_id}/messages",
+                    headers=headers,
+                    json={
+                        "content": "Primeira pergunta em andamento",
+                        "operation_id": "op-race-free-1",
+                    },
+                )
+            )
+            await asyncio.wait_for(agent_started.wait(), timeout=5.0)
+
+            original_list_messages = ChatRepository.list_messages
+            hook_triggered = False
+            send_completed_during_read = False
+
+            async def racing_list_messages(
+                self: ChatRepository,
+                target_session_id: UUID,
+            ) -> list[Any]:
+                nonlocal hook_triggered, send_completed_during_read
+                messages = await original_list_messages(self, target_session_id)
+                if target_session_id == session_id and not hook_triggered:
+                    hook_triggered = True
+                    # Tenta concluir a operação imediatamente após ler o histórico
+                    # e antes de consultar o estado da operação pendente.
+                    release_agent.set()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(send_task_1), timeout=0.25)
+                        send_completed_during_read = True
+                    except TimeoutError:
+                        pass
+                return messages
+
+            monkeypatch.setattr(ChatRepository, "list_messages", racing_list_messages)
+            reopen_resp = await client.get(
+                f"/chat/sessions/{session_id}",
+                headers=headers,
+            )
+            monkeypatch.setattr(ChatRepository, "list_messages", original_list_messages)
+
+            assert hook_triggered is True
+            assert send_completed_during_read is False
+            assert reopen_resp.status_code == 200
+            reopen_body = reopen_resp.json()
+            # Snapshot pré-conclusão consistente: sem resposta ainda + pending_operation presente
+            assert len(reopen_body["messages"]) == 1
+            assert reopen_body["messages"][0]["role"] == "user"
+            assert reopen_body["pending_operation"] is not None
+            assert reopen_body["pending_operation"]["operation_id"] == "op-race-free-1"
+            assert reopen_body["pending_operation"]["status"] == "processing"
+
+            send_resp_1 = await asyncio.wait_for(send_task_1, timeout=5.0)
+            assert send_resp_1.status_code == 201
+
+            after_1 = (
+                await client.get(f"/chat/sessions/{session_id}", headers=headers)
+            ).json()
+            assert len(after_1["messages"]) == 2
+            assert after_1["messages"][1]["content"] == "Resposta concluída #1."
+            assert after_1["pending_operation"] is None
+
+            # --- Cenário B: recuperação chega enquanto a operação está commitando o resultado ---
+            agent_started.clear()
+            release_agent.set()
+            persist_entered = asyncio.Event()
+            release_persist = asyncio.Event()
+            original_persist = AgentIntegrationService.persist_agent_response
+
+            async def pausing_persist(
+                self: AgentIntegrationService,
+                *args: Any,
+                **kwargs: Any,
+            ) -> Any:
+                msg = await original_persist(self, *args, **kwargs)
+                persist_entered.set()
+                await release_persist.wait()
+                return msg
+
+            monkeypatch.setattr(
+                AgentIntegrationService,
+                "persist_agent_response",
+                pausing_persist,
+            )
+
+            send_task_2 = asyncio.create_task(
+                client.post(
+                    f"/chat/sessions/{session_id}/messages",
+                    headers=headers,
+                    json={
+                        "content": "Segunda pergunta concluindo durante leitura",
+                        "operation_id": "op-race-free-2",
+                    },
+                )
+            )
+            await asyncio.wait_for(persist_entered.wait(), timeout=5.0)
+
+            reopen_task_2 = asyncio.create_task(
+                client.get(f"/chat/sessions/{session_id}", headers=headers)
+            )
+            await asyncio.sleep(0.1)
+            assert not reopen_task_2.done()
+
+            release_persist.set()
+            send_resp_2, reopen_resp_2 = await asyncio.wait_for(
+                asyncio.gather(send_task_2, reopen_task_2),
+                timeout=5.0,
+            )
+            monkeypatch.setattr(
+                AgentIntegrationService,
+                "persist_agent_response",
+                original_persist,
+            )
+
+            assert send_resp_2.status_code == 201
+            assert reopen_resp_2.status_code == 200
+            reopen_body_2 = reopen_resp_2.json()
+            # Snapshot pós-conclusão consistente: resposta já presente + pending_operation = None
+            assert len(reopen_body_2["messages"]) == 4
+            assert reopen_body_2["messages"][-1]["content"] == "Resposta concluída #2."
+            assert reopen_body_2["pending_operation"] is None
+    finally:
+        app.dependency_overrides.clear()
+        async with real_session_factory() as cleanup_session:
+            if session_id is not None:
+                await cleanup_session.execute(
+                    delete(ChatSession).where(ChatSession.id == session_id)
+                )
+            await cleanup_session.execute(delete(User).where(User.id == user_id))
+            await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_triage_recovery_stays_consistent_with_card_when_operation_completes_concurrently(
+    real_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Correção 1 do review da #51 (triagem com concorrência real no PostgreSQL):
+    # POST /solicitations/{id}/open recupera cartão, histórico e pending_operation
+    # de forma consistente mesmo quando uma operação conclui durante a recuperação.
+    monkeypatch.setenv("JWT_SECRET_KEY", TEST_SECRET_KEY)
+    monkeypatch.setattr(database, "get_session_maker", lambda: real_session_factory)
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        async with real_session_factory() as session:
+            yield session
+
+    async with real_session_factory() as setup_session:
+        user_repo = UserRepository(setup_session)
+        auth_service = AuthService(UserService(user_repo), secret_key=TEST_SECRET_KEY)
+        user = await user_repo.create(
+            f"race-triage-{uuid4()}@example.com",
+            auth_service.hash_password("password"),
+        )
+        headers = {"Authorization": f"Bearer {auth_service.create_access_token(user.id)}"}
+        user_id = user.id
+        await setup_session.commit()
+
+    agent_started = asyncio.Event()
+    release_agent = asyncio.Event()
+    triage_updates = iter(
+        [
+            {
+                "summary": "Resumo atualizado após conclusão concorrente #1",
+                "request_type": "pedido",
+                "urgency": "normal",
+                "urgency_reason": "Entrega reagendada para a próxima semana.",
+                "received_date_reference": "2026-10-28",
+                "extracted_data": {"delivery_date_start": "2026-11-10"},
+                "pending_items": [],
+            },
+            {
+                "summary": "Oferta atualizada após conclusão concorrente #2",
+                "request_type": "oferta",
+                "urgency": "urgente",
+                "urgency_reason": "Retorno solicitado até amanhã.",
+                "received_date_reference": "2026-10-28",
+                "extracted_data": {"response_deadline": "2026-10-29"},
+                "pending_items": [],
+            },
+        ]
+    )
+
+    async def controlled_triage_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        agent_started.set()
+        await release_agent.wait()
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="triage",
+            selected_agent="triage_agent",
+            result=TriageAnalysis.model_validate(next(triage_updates)),
+        )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_agent_orchestrator] = (
+        lambda: controlled_triage_orchestrator
+    )
+    transport = httpx.ASGITransport(app=app)
+    solicitation_id: UUID | None = None
+    session_id: UUID | None = None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/solicitations",
+                headers=headers,
+                json=_ped_2026_003_payload(),
+            )
+            assert created.status_code == 201
+            created_body = created.json()
+            solicitation_id = UUID(created_body["id"])
+            session_id = UUID(created_body["session_id"])
+            initial_summary = created_body["summary"]
+            initial_urgency = created_body["urgency"]
+            initial_request_type = created_body["request_type"]
+
+            first_open = await client.post(
+                f"/solicitations/{solicitation_id}/open",
+                headers=headers,
+            )
+            assert first_open.status_code == 200
+            assert first_open.json()["status"] == "em_analise"
+
+            # --- Cenário A: conclusão disparada entre list_messages e get_recoverable_operation ---
+            send_task_1 = asyncio.create_task(
+                client.post(
+                    f"/solicitations/{solicitation_id}/messages",
+                    headers=headers,
+                    json={
+                        "content": "Entrega reagendada para 10/11/2026.",
+                        "operation_id": "op-race-triage-1",
+                    },
+                )
+            )
+            await asyncio.wait_for(agent_started.wait(), timeout=5.0)
+
+            original_list_messages = ChatRepository.list_messages
+            hook_triggered = False
+            send_completed_during_open = False
+
+            async def racing_triage_list_messages(
+                self: ChatRepository,
+                target_session_id: UUID,
+            ) -> list[Any]:
+                nonlocal hook_triggered, send_completed_during_open
+                messages = await original_list_messages(self, target_session_id)
+                if target_session_id == session_id and not hook_triggered:
+                    hook_triggered = True
+                    release_agent.set()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(send_task_1), timeout=0.25)
+                        send_completed_during_open = True
+                    except TimeoutError:
+                        pass
+                return messages
+
+            monkeypatch.setattr(
+                ChatRepository, "list_messages", racing_triage_list_messages
+            )
+            reopen_resp = await client.post(
+                f"/solicitations/{solicitation_id}/open",
+                headers=headers,
+            )
+            monkeypatch.setattr(ChatRepository, "list_messages", original_list_messages)
+
+            assert hook_triggered is True
+            assert send_completed_during_open is False
+            assert reopen_resp.status_code == 200
+            reopen_body = reopen_resp.json()
+            # Snapshot pré-conclusão consistente: cartão inicial + 3 msgs + pending_operation ativa
+            assert reopen_body["summary"] == initial_summary
+            assert reopen_body["urgency"] == initial_urgency
+            assert reopen_body["request_type"] == initial_request_type
+            assert len(reopen_body["messages"]) == 3
+            assert reopen_body["pending_operation"] is not None
+            assert reopen_body["pending_operation"]["operation_id"] == "op-race-triage-1"
+            assert reopen_body["pending_operation"]["status"] == "processing"
+
+            send_resp_1 = await asyncio.wait_for(send_task_1, timeout=5.0)
+            assert send_resp_1.status_code == 201
+
+            after_1 = (
+                await client.post(
+                    f"/solicitations/{solicitation_id}/open",
+                    headers=headers,
+                )
+            ).json()
+            assert after_1["summary"] == "Resumo atualizado após conclusão concorrente #1"
+            assert after_1["urgency"] == "normal"
+            assert after_1["request_type"] == "pedido"
+            assert len(after_1["messages"]) == 4
+            assert after_1["pending_operation"] is None
+
+            # --- Cenário B: abertura concorrente enquanto _phase3_commit_result atualiza cartão e mensagens ---
+            agent_started.clear()
+            release_agent.set()
+            persist_entered = asyncio.Event()
+            release_persist = asyncio.Event()
+            original_persist = AgentIntegrationService.persist_agent_response
+
+            async def pausing_triage_persist(
+                self: AgentIntegrationService,
+                *args: Any,
+                **kwargs: Any,
+            ) -> Any:
+                msg = await original_persist(self, *args, **kwargs)
+                persist_entered.set()
+                await release_persist.wait()
+                return msg
+
+            monkeypatch.setattr(
+                AgentIntegrationService,
+                "persist_agent_response",
+                pausing_triage_persist,
+            )
+
+            send_task_2 = asyncio.create_task(
+                client.post(
+                    f"/solicitations/{solicitation_id}/messages",
+                    headers=headers,
+                    json={
+                        "content": "Na verdade trata-se de oferta urgente para retorno amanhã.",
+                        "operation_id": "op-race-triage-2",
+                    },
+                )
+            )
+            await asyncio.wait_for(persist_entered.wait(), timeout=5.0)
+
+            open_task_2 = asyncio.create_task(
+                client.post(
+                    f"/solicitations/{solicitation_id}/open",
+                    headers=headers,
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert not open_task_2.done()
+
+            release_persist.set()
+            send_resp_2, open_resp_2 = await asyncio.wait_for(
+                asyncio.gather(send_task_2, open_task_2),
+                timeout=5.0,
+            )
+            monkeypatch.setattr(
+                AgentIntegrationService,
+                "persist_agent_response",
+                original_persist,
+            )
+
+            assert send_resp_2.status_code == 201
+            assert open_resp_2.status_code == 200
+            open_body_2 = open_resp_2.json()
+            # Snapshot pós-conclusão consistente: cartão atualizado + 6 msgs + pending_operation = None
+            assert open_body_2["summary"] == "Oferta atualizada após conclusão concorrente #2"
+            assert open_body_2["request_type"] == "oferta"
+            assert open_body_2["urgency"] == "urgente"
+            assert len(open_body_2["messages"]) == 6
+            assert open_body_2["pending_operation"] is None
+            assert (
+                "Oferta atualizada após conclusão concorrente #2"
+                in open_body_2["messages"][-1]["content"]
+            )
+    finally:
+        app.dependency_overrides.clear()
+        async with real_session_factory() as cleanup_session:
+            if solicitation_id is not None:
+                await cleanup_session.execute(
+                    delete(Solicitation).where(Solicitation.id == solicitation_id)
+                )
+            if session_id is not None:
+                await cleanup_session.execute(
+                    delete(ChatSession).where(ChatSession.id == session_id)
+                )
+            await cleanup_session.execute(delete(User).where(User.id == user_id))
+            await cleanup_session.commit()
