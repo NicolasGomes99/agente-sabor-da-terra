@@ -9,6 +9,7 @@ from .classification import (
     UrgencyLevel,
     evaluate_urgency,
 )
+from .enrichment import TriageDocumentEnrichment
 from .extracted_data import TriageExtractedData
 from .input import _normalize_iso_date_str
 from .items import DeadlineAction
@@ -75,6 +76,8 @@ class TriageAnalysis(BaseModel):
         default=False,
         description="True quando há ambiguidades, conflitos ou dados faltantes a esclarecer.",
     )
+
+    document_enrichment: TriageDocumentEnrichment | None = None
 
     @field_validator("received_date_reference", mode="before")
     @classmethod

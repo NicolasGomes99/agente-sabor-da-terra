@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from ...agents.triage.schemas import TriageAnalysis, TriageInput
 from ...models.solicitation import SolicitationType, SolicitationUrgency
 from .dates import format_date, format_text_dates
@@ -31,7 +33,11 @@ def build_triage_session_title(
     return source[:120]
 
 
-def format_triage_analysis(analysis: TriageAnalysis) -> str:
+def format_triage_analysis(
+    analysis: TriageAnalysis,
+    *,
+    source_references: Mapping[str, str] | None = None,
+) -> str:
     request_type = SolicitationType(analysis.request_type.value)
     urgency = SolicitationUrgency(analysis.urgency.value)
 
@@ -55,4 +61,15 @@ def format_triage_analysis(analysis: TriageAnalysis) -> str:
     lines.extend(requirement_lines(extracted.requirements))
     lines.extend(document_lines(extracted))
     lines.extend(pending_lines(analysis.pending_items))
+    if analysis.document_enrichment and analysis.document_enrichment.findings:
+        lines.append("Verificação documental e operacional:")
+        for finding in analysis.document_enrichment.findings:
+            follow_up = " [a verificar]" if finding.needs_follow_up else ""
+            references = [
+                source_references[source_id]
+                for source_id in dict.fromkeys(finding.source_ids)
+                if source_references and source_id in source_references
+            ]
+            suffix = f" Fontes: {', '.join(references)}" if references else ""
+            lines.append(f"- {finding.description}{follow_up}{suffix}")
     return "\n".join(lines)

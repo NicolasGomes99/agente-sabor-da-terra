@@ -52,6 +52,7 @@ from .triage import (
     analyze_triage_message,
     create_triage_agent,
 )
+from .triage.enrichment import enrich_triage_analysis
 
 ORCHESTRATOR_APP_NAME = "sabor_da_terra_orchestrator"
 APPLICATION_ENTRYPOINT = "api.agents.agent:orchestrate_request"
@@ -105,6 +106,7 @@ async def orchestrate_request(
     session_store: OrchestratorSessionStore | None = None,
     triage_runner: Runner | None = None,
     consultation_runner: Runner | None = None,
+    triage_enrichment_runner: Runner | None = None,
     router_runner: Runner | None = None,
     financial_records_provider: FinancialRecordsProvider | None = None,
     model: str | None = None,
@@ -146,7 +148,9 @@ async def orchestrate_request(
             runner=triage_runner,
             model=model,
         )
-        result: TriageAnalysis | ConsultationResponse = triage_result
+        result: TriageAnalysis | ConsultationResponse = await enrich_triage_analysis(
+            triage_result, request.sources, runner=triage_enrichment_runner, model=model,
+        )
         selected_agent: Literal["triage_agent", "consultation_agent"] = "triage_agent"
         assistant_summary = triage_result.summary
         turn_received_at = triage_received_ref
