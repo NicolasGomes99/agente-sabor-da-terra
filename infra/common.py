@@ -106,6 +106,7 @@ def run_command(
     env: dict[str, str] | None = None,
     check: bool = True,
     capture_output: bool = False,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     print(f"$ {format_command(command)}", flush=True)
     resolved_env = os.environ.copy()
@@ -119,6 +120,7 @@ def run_command(
             text=True,
             check=check,
             capture_output=capture_output,
+            input=input_text,
         )
     except FileNotFoundError as error:
         executable = str(command[0])
