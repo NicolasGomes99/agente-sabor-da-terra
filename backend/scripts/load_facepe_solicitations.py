@@ -11,7 +11,10 @@ from api.agents.agent import orchestrate_request
 from api.agents.schemas import OrchestratorRequest
 from api.agents.triage.schemas import TriageAnalysis, TriageInput
 from api.database import get_engine, get_session_maker
-from api.dependencies import get_document_source_provider
+from api.dependencies import (
+    get_document_source_provider,
+    get_embedding_client,
+)
 from api.repositories.solicitation import SolicitationRepository
 from api.schemas.agent_integration import DocumentRetrievalContext
 from api.schemas.solicitation import SolicitationCreate
@@ -41,7 +44,11 @@ async def run(selected_ids: list[str]) -> None:
         async with get_session_maker()() as session:
             repository = SolicitationRepository(session)
             service = SolicitationService(repository)
-            source_provider = get_document_source_provider(session)
+
+            source_provider = get_document_source_provider(
+                session,
+                get_embedding_client(),
+            )
 
             for pedido_id in dict.fromkeys(selected_ids):
                 pedido = pedidos_by_id[pedido_id]
@@ -90,7 +97,7 @@ async def run(selected_ids: list[str]) -> None:
                 )
 
                 if not isinstance(response.result, TriageAnalysis):
-                    raise RuntimeError(
+                    raise TypeError(
                         f"Resultado de triagem inválido: {pedido_id}"
                     )
 

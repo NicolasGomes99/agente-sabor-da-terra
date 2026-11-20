@@ -3,14 +3,12 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from shutil import copytree
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from api import database
 from api.agents.consultation.financial import calculate_producer_financial_summary
 from api.agents.schemas import ConversationTurn, OrchestratorFlow
@@ -43,6 +41,8 @@ from api.services.auth import AuthService
 from api.services.producer_summary import ProducerSummaryService
 from api.services.user import UserService
 from api.storage.local import LocalDocumentStorage
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -626,3 +626,295 @@ async def test_producer_summary_service_integrates_end_to_end_with_rag_retrieval
         if item.document_name == "sazonalidade.csv"
     }
     assert {"cajá", "queijo coalho"} <= season_products
+
+@pytest.mark.asyncio
+async def test_retrieval_preserves_complete_structured_records(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    storage = LocalDocumentStorage(tmp_path)
+    embeddings = DeterministicHashEmbeddingClient(dimensions=128)
+    repository = DocumentRepository(db_session)
+
+    indexer = DocumentIndexingService(
+        repository,
+        storage,
+        embeddings,
+    )
+
+    retrieval = RagRetrievalService(
+        repository,
+        embeddings,
+        semantic_top_k=5,
+    )
+
+    await indexer.load_facepe_documents(DATA_DIR)
+
+    # Consulta em linguagem natural sem período previamente estruturado.
+    financial_result = await retrieval.retrieve_sources(
+        DocumentRetrievalContext(
+            session_id=uuid4(),
+            query_text="Quais foram as vendas de P001 em setembro de 2026?",
+            reference_date=date(2026, 11, 20),
+        )
+    )
+
+    assert financial_result.financial_records is not None
+
+    financial_ids = {
+        item.record_id
+        for item in financial_result.financial_records
+    }
+
+    assert {
+        "FIN-2026-001",
+        "FIN-2026-002",
+        "FIN-2026-015",
+    } <= financial_ids
+
+    assert all(
+        item.record_fields is not None
+        and item.record_fields["produtor_id"] == "P001"
+        for item in financial_result.financial_records
+    )
+
+    calculation = calculate_producer_financial_summary(
+        "P001",
+        financial_records=financial_result.financial_records,
+        period_start=date(2026, 9, 1),
+        period_end=date(2026, 9, 30),
+        reference_date=date(2026, 11, 20),
+    )
+
+    assert calculation.has_any_records is True
+
+    assert (
+        calculation.sales_in_period.total_amount
+        == Decimal("1090.00")
+    )
+
+    # Recuperação exaustiva por nome de arquivo.
+    structured_result = await retrieval.retrieve_sources(
+        DocumentRetrievalContext(
+            session_id=uuid4(),
+            query_text="Liste todos os registros de sazonalidade.csv.",
+        )
+    )
+
+    seasonality_sources = [
+        item
+        for item in structured_result.sources
+        if item.document_name == "sazonalidade.csv"
+    ]
+
+    assert len(seasonality_sources) == 50
+
+    assert len({
+        item.source_id
+        for item in seasonality_sources
+    }) == 50
+
+@pytest.mark.asyncio
+async def test_facepe_update_preserves_cited_evidence_and_original_file(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    copytree(DATA_DIR, data_dir)
+
+    storage = LocalDocumentStorage(tmp_path / "storage")
+    embeddings = DeterministicHashEmbeddingClient(dimensions=128)
+    repository = DocumentRepository(db_session)
+
+    indexer = DocumentIndexingService(
+        repository,
+        storage,
+        embeddings,
+    )
+
+    retrieval = RagRetrievalService(
+        repository,
+        embeddings,
+        semantic_top_k=5,
+    )
+
+    await indexer.load_facepe_documents(data_dir)
+
+    document = await repository.get_by_source_path("lotes.csv")
+    assert document is not None
+
+    document_id = document.id
+    original_storage_key = document.storage_key
+
+    file_path = data_dir / "lotes.csv"
+    original_bytes = file_path.read_bytes()
+
+    original_chunks = await repository.list_chunks_by_document(
+        document_id,
+        only_active=True,
+    )
+
+    cited_chunk = next(
+        chunk
+        for chunk in original_chunks
+        if chunk.record_id == "LOT-2026-0099"
+    )
+
+    unchanged_chunk = next(
+        chunk
+        for chunk in original_chunks
+        if chunk.record_id == "LOT-2026-0094"
+    )
+
+    cited_chunk_id = cited_chunk.id
+    unchanged_chunk_id = unchanged_chunk.id
+
+    original_content = cited_chunk.content
+    original_fields = dict(cited_chunk.record_fields or {})
+
+    # Cria uma citação vinculada à versão original do registro.
+    user, _ = await _create_auth_headers(db_session)
+
+    chat_session = ChatSession(
+        user_id=user.id,
+        title="Teste de preservação de evidência",
+    )
+
+    db_session.add(chat_session)
+    await db_session.flush()
+
+    message = ChatMessage(
+        session_id=chat_session.id,
+        role=ChatMessageRole.AGENT,
+        content="Consulta sobre o lote LOT-2026-0099.",
+        position=1,
+    )
+
+    db_session.add(message)
+    await db_session.flush()
+
+    message_id = message.id
+
+    db_session.add(
+        Citation(
+            message_id=message_id,
+            chunk_id=cited_chunk_id,
+        )
+    )
+
+    await db_session.commit()
+
+    # Modifica efetivamente o conteúdo do registro citado.
+    assert "40 maços (kg)".encode() in original_bytes
+
+    updated_bytes = original_bytes.replace(
+        "40 maços (kg)".encode(),
+        "40 maços".encode(),
+        1,
+    )
+
+    file_path.write_bytes(updated_bytes)
+
+    update_summary = await indexer.load_facepe_documents(data_dir)
+
+    assert update_summary.documents_created == 0
+    assert update_summary.documents_reused == 25
+    assert update_summary.documents_indexed == 1
+    assert update_summary.documents_skipped == 24
+    assert update_summary.documents_failed == 0
+
+    # A identidade do documento permanece inalterada.
+    updated_document = await repository.get_by_source_path(
+        "lotes.csv"
+    )
+
+    assert updated_document is not None
+    assert updated_document.id == document_id
+
+    assert (
+        updated_document.storage_key
+        != original_storage_key
+    )
+
+    # Ambas as versões do arquivo permanecem no armazenamento.
+    with storage.open(original_storage_key) as reader:
+        assert reader.read() == original_bytes
+
+    with storage.open(updated_document.storage_key) as reader:
+        assert reader.read() == updated_bytes
+
+    # A evidência histórica deve permanecer intacta.
+    preserved_chunk = await db_session.get(
+        DocumentChunk,
+        cited_chunk_id,
+    )
+
+    assert preserved_chunk is not None
+    assert preserved_chunk.is_active is False
+    assert preserved_chunk.content == original_content
+    assert preserved_chunk.record_fields == original_fields
+
+    citation = await db_session.scalar(
+        select(Citation).where(
+            Citation.message_id == message_id,
+            Citation.chunk_id == cited_chunk_id,
+        )
+    )
+
+    assert citation is not None
+
+    # A recuperação deve retornar somente a versão atualizada.
+    updated_chunks = await repository.list_chunks_by_document(
+        document_id,
+        only_active=True,
+    )
+
+    assert len(updated_chunks) == 20
+
+    updated_chunk = next(
+        chunk
+        for chunk in updated_chunks
+        if chunk.record_id == "LOT-2026-0099"
+    )
+
+    assert updated_chunk.id != cited_chunk_id
+    assert updated_chunk.record_fields is not None
+    assert updated_chunk.record_fields["observacao"] == "40 maços"
+
+    retrieved = await retrieval.get_by_record_ids(
+        ["LOT-2026-0099"]
+    )
+
+    assert len(retrieved) == 1
+    assert retrieved[0].record_fields is not None
+    assert retrieved[0].record_fields["observacao"] == "40 maços"
+
+    # Registros inalterados devem manter seus identificadores.
+    assert any(
+        chunk.id == unchanged_chunk_id
+        for chunk in updated_chunks
+    )
+
+    active_ids_before = {
+        chunk.id for chunk in updated_chunks
+    }
+
+    # Uma nova reindexação não pode duplicar os trechos.
+    await indexer.index_document(document_id)
+
+    active_chunks_after = (
+        await repository.list_chunks_by_document(
+            document_id,
+            only_active=True,
+        )
+    )
+
+    assert {
+        chunk.id for chunk in active_chunks_after
+    } == active_ids_before
+
+    all_chunks = await repository.list_chunks_by_document(
+        document_id
+    )
+
+    assert len(all_chunks) == 21

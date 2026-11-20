@@ -12,7 +12,6 @@ from ..repositories.document import DocumentRepository
 from ..storage.base import DocumentStorage
 from .embeddings import EmbeddingClient
 from .extractors import (
-    DocumentExtractionError,
     ExtractedChunk,
     extract_document_chunks,
     is_indexable_document,
@@ -231,22 +230,41 @@ class DocumentIndexingService:
         vectors: list[list[float]],
     ) -> DocumentIndexingSummary:
         document = await self.repository.get_by_id(document_id)
+
         if document is None:
             raise DocumentIndexingNotFoundError(document_id)
 
-        existing_chunks = await self.repository.list_chunks_by_document(document_id)
-        cited_chunk_ids = await self.repository.list_cited_chunk_ids_by_document(
+        existing_chunks = await self.repository.list_chunks_by_document(
             document_id
+        )
+
+        cited_chunk_ids = (
+            await self.repository.list_cited_chunk_ids_by_document(
+                document_id
+            )
         )
 
         by_chunk_key: dict[str, DocumentChunk] = {}
         by_record_id: dict[str, DocumentChunk] = {}
         by_content: dict[str, list[DocumentChunk]] = {}
+
         for existing in existing_chunks:
-            if existing.chunk_key and existing.chunk_key not in by_chunk_key:
+            # Versões históricas não devem ser reutilizadas ou sobrescritas.
+            if not existing.is_active:
+                continue
+
+            if (
+                existing.chunk_key
+                and existing.chunk_key not in by_chunk_key
+            ):
                 by_chunk_key[existing.chunk_key] = existing
-            if existing.record_id and existing.record_id not in by_record_id:
+
+            if (
+                existing.record_id
+                and existing.record_id not in by_record_id
+            ):
                 by_record_id[existing.record_id] = existing
+
             by_content.setdefault(existing.content, []).append(existing)
 
         used_ids: set[UUID] = set()
@@ -255,7 +273,17 @@ class DocumentIndexingService:
         chunks_preserved_cited = 0
         chunks_deleted = 0
 
-        for extracted, vector in zip(extracted_chunks, vectors, strict=True):
+        for extracted, vector in zip(
+            extracted_chunks,
+            vectors,
+            strict=True,
+        ):
+            record_fields = (
+                dict(extracted.record_fields)
+                if extracted.record_fields is not None
+                else None
+            )
+
             matched = _match_existing_chunk(
                 extracted,
                 by_chunk_key=by_chunk_key,
@@ -263,21 +291,59 @@ class DocumentIndexingService:
                 by_content=by_content,
                 used_ids=used_ids,
             )
+
+            def has_same_evidence(
+                candidate: DocumentChunk,
+                extracted_chunk: ExtractedChunk = extracted,
+                fields: dict[str, str] | None = record_fields,
+            ) -> bool:
+                return (
+                    candidate.content == extracted_chunk.content
+                    and candidate.record_id == extracted_chunk.record_id
+                    and candidate.record_fields == fields
+                )
+
+            # Prioriza a reutilização de evidências inalteradas,
+            # inclusive quando sua posição no documento muda.
+            if matched is None or not has_same_evidence(matched):
+                unchanged = next(
+                    (
+                        candidate
+                        for candidate in by_content.get(
+                            extracted.content, ()
+                        )
+                        if candidate.id not in used_ids
+                        and has_same_evidence(candidate)
+                    ),
+                    None,
+                )
+
+                if unchanged is not None:
+                    matched = unchanged
+
+            # Trechos citados não podem ter sua evidência modificada.
+            # A versão original será preservada na etapa de limpeza.
+            if (
+                matched is not None
+                and matched.id in cited_chunk_ids
+                and not has_same_evidence(matched)
+            ):
+                matched = None
+
             if matched is not None:
                 used_ids.add(matched.id)
+
                 matched.content = extracted.content
                 matched.embedding = list(vector)
                 matched.embedding_model = self.embedding_client.model_name
                 matched.chunk_index = extracted.chunk_index
                 matched.chunk_key = extracted.chunk_key
                 matched.record_id = extracted.record_id
-                matched.record_fields = (
-                    dict(extracted.record_fields)
-                    if extracted.record_fields is not None
-                    else None
-                )
+                matched.record_fields = record_fields
                 matched.is_active = True
+
                 chunks_updated += 1
+
             else:
                 new_chunk = DocumentChunk(
                     document_id=document.id,
@@ -288,22 +354,22 @@ class DocumentIndexingService:
                     chunk_key=extracted.chunk_key,
                     is_active=True,
                     record_id=extracted.record_id,
-                    record_fields=(
-                        dict(extracted.record_fields)
-                        if extracted.record_fields is not None
-                        else None
-                    ),
+                    record_fields=record_fields,
                 )
+
                 self.session.add(new_chunk)
                 chunks_created += 1
 
         for existing in existing_chunks:
             if existing.id in used_ids:
                 continue
+
             if existing.id in cited_chunk_ids:
-                # Preserva integralmente o trecho citado sem expô-lo como ativo se obsoleto.
+                # Preserva a evidência original e a integridade da citação,
+                # mas impede a recuperação de conteúdo obsoleto.
                 existing.is_active = False
                 chunks_preserved_cited += 1
+
             else:
                 await self.session.delete(existing)
                 chunks_deleted += 1
@@ -312,6 +378,7 @@ class DocumentIndexingService:
         document.processing_status = DocumentProcessingStatus.INDEXED.value
         document.processing_error = None
         document.indexed_at = datetime.now(UTC)
+
         await self.session.flush()
 
         return DocumentIndexingSummary(
@@ -375,73 +442,156 @@ class DocumentIndexingService:
         *,
         reindex_existing: bool = False,
     ) -> FacepeDocumentLoadSummary:
-        """Armazena, processa e indexa de forma idempotente os 20 TXTs e 5 CSVs da Facepe."""
+        """Armazena, processa e indexa os documentos da base Facepe."""
         files = discover_facepe_documents(data_dir)
         summary = FacepeDocumentLoadSummary()
 
         for source_path, file_path in files:
             raw_bytes = await to_thread(file_path.read_bytes)
             content_hash = _sha256_hex(raw_bytes)
-            existing = await self.repository.get_by_source_path(source_path)
+
+            existing = await self.repository.get_by_source_path(
+                source_path
+            )
 
             if existing is None:
                 storage_key = uuid4().hex
-                await to_thread(self.storage.save, storage_key, BytesIO(raw_bytes))
+
+                await to_thread(
+                    self.storage.save,
+                    storage_key,
+                    BytesIO(raw_bytes),
+                )
+
                 try:
                     document = await self.repository.create(
                         file_path.name,
                         storage_key,
                         source_path=source_path,
                         content_sha256=content_hash,
-                        processing_status=DocumentProcessingStatus.PENDING.value,
+                        processing_status=(
+                            DocumentProcessingStatus.PENDING.value
+                        ),
                     )
-                    await self.session.commit()
+
                 except Exception:
                     await self.session.rollback()
+
                     try:
-                        await to_thread(self.storage.delete, storage_key)
-                    except Exception:
-                        logger.exception(
-                            "Falha ao remover arquivo órfão %s após erro na carga Facepe",
+                        await to_thread(
+                            self.storage.delete,
                             storage_key,
                         )
+                    except Exception:
+                        logger.exception(
+                            "Falha ao remover arquivo órfão %s",
+                            storage_key,
+                        )
+
                     raise
+
+                await self.session.commit()
+
                 summary.documents_created += 1
+
             else:
                 document = existing
                 summary.documents_reused += 1
+
+                content_changed = (
+                    document.content_sha256 != content_hash
+                )
+
                 is_unchanged_indexed = (
-                    document.processing_status == DocumentProcessingStatus.INDEXED.value
-                    and document.content_sha256 == content_hash
+                    document.processing_status
+                    == DocumentProcessingStatus.INDEXED.value
+                    and not content_changed
                     and not reindex_existing
                 )
+
                 if is_unchanged_indexed:
-                    counts = await self.repository.count_active_chunks_by_documents(
-                        [document.id]
+                    counts = (
+                        await self.repository.count_active_chunks_by_documents(
+                            [document.id]
+                        )
                     )
+
                     active_count = counts.get(document.id, 0)
+
                     summary.documents_skipped += 1
                     summary.total_active_chunks += active_count
-                    summary.chunks_by_filename[document.original_filename] = active_count
+                    summary.chunks_by_filename[
+                        document.original_filename
+                    ] = active_count
+
                     continue
 
-                if document.content_sha256 != content_hash:
+                if content_changed:
+                    previous_storage_key = document.storage_key
+                    new_storage_key = uuid4().hex
+
+                    # Os adaptadores de armazenamento não permitem
+                    # sobrescrever arquivos existentes.
                     await to_thread(
                         self.storage.save,
-                        document.storage_key,
+                        new_storage_key,
                         BytesIO(raw_bytes),
                     )
 
+                    try:
+                        document.storage_key = new_storage_key
+                        document.content_sha256 = content_hash
+                        document.processing_status = (
+                            DocumentProcessingStatus.PENDING.value
+                        )
+                        document.processing_error = None
+                        document.indexed_at = None
+
+                        await self.session.flush()
+
+                    except Exception:
+                        await self.session.rollback()
+
+                        try:
+                            await to_thread(
+                                self.storage.delete,
+                                new_storage_key,
+                            )
+
+                        except Exception:
+                            logger.exception(
+                                "Falha ao remover arquivo órfão %s",
+                                new_storage_key,
+                            )
+
+                        raise
+
+                    # O conteúdo anterior permanece no armazenamento.
+                    # O documento mantém sua identidade no banco.
+                    await self.session.commit()
+
+                    logger.info(
+                        "Documento %s atualizado: storage_key %s -> %s",
+                        document.id,
+                        previous_storage_key,
+                        new_storage_key,
+                    )
+
             try:
-                result = await self.index_document(document.id, raise_on_error=True)
-            except (DocumentExtractionError, Exception):
+                result = await self.index_document(
+                    document.id,
+                    raise_on_error=True,
+                )
+
+            except Exception:
                 summary.documents_failed += 1
                 raise
 
             summary.documents_indexed += 1
             summary.total_active_chunks += result.active_chunk_count
-            summary.chunks_by_filename[document.original_filename] = (
-                result.active_chunk_count
-            )
+
+            summary.chunks_by_filename[
+                document.original_filename
+            ] = result.active_chunk_count
 
         return summary

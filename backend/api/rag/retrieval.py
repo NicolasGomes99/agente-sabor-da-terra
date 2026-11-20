@@ -442,6 +442,7 @@ class RagRetrievalService:
                     document_name="lotes.csv",
                 )
             )
+
         if merged_ids["financial"]:
             exact_sources.extend(
                 await self.get_by_record_ids(
@@ -449,7 +450,9 @@ class RagRetrievalService:
                     document_name=FINANCIAL_SOURCE_FILENAME,
                 )
             )
+
         producer_targets = list(merged_ids["producers"])
+
         if context.producer_id and context.producer_id.strip():
             ctx_prod = context.producer_id.strip().upper()
             if ctx_prod not in producer_targets:
@@ -462,18 +465,21 @@ class RagRetrievalService:
                     document_name="produtores.csv",
                 )
             )
-            # Quando há filtro estruturado por produtor (ex.: resumo consolidado #63),
-            # fornece de forma exaustiva os registros históricos de lotes.csv desse produtor.
+
             if context.producer_id and context.producer_id.strip():
                 exact_sources.extend(
                     await self.query_structured_records(
                         document_name="lotes.csv",
-                        field_filters={"produtor_id": context.producer_id.strip()},
+                        field_filters={
+                            "produtor_id": context.producer_id.strip()
+                        },
                     )
                 )
-            # Também inclui documentos nominais do produtor (certificações/laudos com _P00X.txt)
+
             try:
-                all_docs = await self.repository.list_by_processing_status(("indexed",))
+                all_docs = await self.repository.list_by_processing_status(
+                    ("indexed",)
+                )
                 matched_doc_ids = [
                     doc.id
                     for doc in all_docs
@@ -482,13 +488,17 @@ class RagRetrievalService:
                         for pid in producer_targets
                     )
                 ]
+
                 if matched_doc_ids:
-                    producer_doc_chunks = await self.repository.list_indexed_chunks(
-                        document_ids=matched_doc_ids
+                    producer_doc_chunks = (
+                        await self.repository.list_indexed_chunks(
+                            document_ids=matched_doc_ids
+                        )
                     )
                     exact_sources.extend(
                         document_chunks_to_source_items(producer_doc_chunks)
                     )
+
             except Exception as error:
                 raise DocumentRetrievalError(
                     f"Falha ao recuperar documentos do produtor: {error}"
@@ -499,10 +509,12 @@ class RagRetrievalService:
                 file_chunks = await self.repository.list_indexed_chunks(
                     document_names=merged_ids["files"]
                 )
-                # Evita inundar o prompt se um CSV grande for citado apenas pelo nome
+
+                # A recuperação exata por arquivo não utiliza o limite semântico.
                 exact_sources.extend(
-                    document_chunks_to_source_items(file_chunks[: self.semantic_top_k])
+                    document_chunks_to_source_items(file_chunks)
                 )
+
             except Exception as error:
                 raise DocumentRetrievalError(
                     f"Falha ao recuperar documento citado pelo nome: {error}"
@@ -513,8 +525,8 @@ class RagRetrievalService:
             top_k=self.semantic_top_k,
         )
 
-        # Em consultas explícitas sobre preços, garante busca dedicada em tabela_precos se existir
         normalized_q = _normalize_text(contextual_query)
+
         if any(kw in normalized_q for kw in _PRICE_INTENT_KEYWORDS):
             price_hits = await self.semantic_search(
                 contextual_query,
@@ -523,16 +535,16 @@ class RagRetrievalService:
             )
             semantic_sources = [*price_hits, *semantic_sources]
 
-        # Na triagem (#62) ou em consultas sazonais, inclui exatamente os registros de
-        # sazonalidade.csv correspondentes aos produtos mencionados, sem depender do top-k.
         is_triage_context = (
             context.flow == OrchestratorFlow.TRIAGE
             or context.solicitation_id is not None
         )
+
         if is_triage_context or any(
             kw in normalized_q for kw in _SEASONALITY_INTENT_KEYWORDS
         ):
             seasonality_text = normalized_q
+
             if is_triage_context and context.history:
                 seasonality_text = _normalize_text(
                     " ".join(
@@ -542,15 +554,20 @@ class RagRetrievalService:
                         ]
                     )
                 )
+
             try:
-                seasonality_chunks = await self.repository.list_indexed_chunks(
-                    document_name="sazonalidade.csv",
-                    only_records=True,
+                seasonality_chunks = (
+                    await self.repository.list_indexed_chunks(
+                        document_name="sazonalidade.csv",
+                        only_records=True,
+                    )
                 )
+
             except Exception as error:
                 raise DocumentRetrievalError(
                     f"Falha ao recuperar registros de sazonalidade: {error}"
                 ) from error
+
             matched_seasonality = [
                 chunk
                 for chunk in seasonality_chunks
@@ -559,47 +576,41 @@ class RagRetrievalService:
                         str((chunk.record_fields or {}).get("produto", ""))
                     )
                 )
-                and re.search(rf"\b{re.escape(norm_prod)}\b", seasonality_text)
+                and re.search(
+                    rf"\b{re.escape(norm_prod)}\b",
+                    seasonality_text,
+                )
             ]
+
             if matched_seasonality:
                 exact_sources.extend(
                     document_chunks_to_source_items(matched_seasonality)
                 )
 
-        # Deduplica preservando ordem de relevância (acertos exatos primeiro, depois semânticos)
+        # Preserva a prioridade dos resultados exatos e remove duplicações.
         merged_sources: list[ConsultationSourceItem] = []
         seen_ids: set[str] = set()
+
         for item in (*exact_sources, *semantic_sources):
             if item.source_id not in seen_ids:
                 seen_ids.add(item.source_id)
                 merged_sources.append(item)
 
         financial_records: list[ConsultationSourceItem] | None = None
+
         if _has_financial_intent(contextual_query, context, merged_ids):
             resolved_producer = context.producer_id or (
-                merged_ids["producers"][0] if len(merged_ids["producers"]) == 1 else None
+                merged_ids["producers"][0]
+                if len(merged_ids["producers"]) == 1
+                else None
             )
-            resolved_ref_date = context.financial_reference_date or context.reference_date
-            if resolved_producer is not None and (
-                context.period_start is not None
-                or context.period_end is not None
-                or resolved_ref_date is not None
-            ):
-                financial_records = await self.query_financial_records(
-                    producer_id=resolved_producer,
-                    period_start=context.period_start,
-                    period_end=context.period_end,
-                    reference_date=resolved_ref_date,
-                    include_pending_as_of_reference=True,
-                )
-            elif resolved_producer is not None:
-                financial_records = await self.query_financial_records(
-                    producer_id=resolved_producer,
-                )
-            else:
-                # Sem produtor resolvido no contexto, fornece a coleção exaustiva de financeiro.csv
-                # para que a ferramenta da #40 resolva o produtor pelo nome/código sem truncar.
-                financial_records = await self.query_financial_records()
+
+            # Disponibiliza a coleção financeira completa do produtor,
+            # delegando os filtros temporais à ferramenta determinística.
+            # Sem produtor identificado, recupera todos os registros.
+            financial_records = await self.query_financial_records(
+                producer_id=resolved_producer,
+            )
 
         return RetrievedDocumentSources(
             sources=merged_sources,
