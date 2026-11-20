@@ -8,7 +8,10 @@
     "tier": "db-f1-micro",
     "storage_size_gb": 10,
     "backup_enabled": false,
-    "deletion_protection": true
+    "deletion_protection": true,
+    "admin_user": "postgres",
+    "migrator_user": "sabor_da_terra_migrator",
+    "application_user": "sabor_da_terra_app"
   },
   "artifacts": {
     "repository_name": "sabor-da-terra"
