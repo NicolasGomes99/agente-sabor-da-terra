@@ -1,97 +1,164 @@
-# Desenvolvimento
-
-## Stack
-
-- Frontend com React, TypeScript, React Router, Vite e npm. O Oxlint faz o lint. Os testes usam Vitest, React Testing Library e jsdom.
-- Backend com Python 3.12 ou superior e uv. A API usa FastAPI e Pydantic. O acesso ao PostgreSQL usa SQLAlchemy assíncrono e asyncpg, com migrações pelo Alembic. A autenticação usa JWT e a API usa Argon2 para gerar hashes de senha. Pytest, Ruff e Testcontainers ficam no grupo `dev`. A camada de agentes usa Google ADK.
-
-## Estrutura do repositório
-
-```text
-frontend/
-  src/
-    app/         # rotas da SPA
-    components/  # componentes compartilhados
-    features/    # páginas, componentes e lógica de cada funcionalidade
-    lib/         # cliente HTTP e utilitários compartilhados
-    styles/      # estilos globais e tokens visuais
-  tests/
-backend/
-  api/
-    app.py
-    config.py
-    database.py
-    models/
-    repositories/
-    schemas/
-    services/
-    storage/
-    routers/
-    dependencies.py
-    agents/
-  alembic.ini
-  alembic/
-    versions/
-  tests/
-    unit/
-    integration/
-compose.yaml
-```
-
-Os routers recebem as requisições e delegam aos serviços. Os schemas definem a entrada e a saída da API. Os serviços aplicam as regras da aplicação e usam repositories para acessar o banco. Os repositories recebem uma sessão do SQLAlchemy e operam sobre os models. `dependencies.py` liga essas camadas e fornece `get_current_user` para as rotas internas que precisarem de autenticação. Use nomes em inglês no código, como `User` para a classe e `users` para a tabela.
-
-A camada de agentes fica em `agents/`, com o orquestrador em `agent.py` e os agentes especializados em `triage/` e `consultation/`. A função assíncrona `orchestrate_request` é o ponto de entrada disponibilizado para integração com a aplicação. O objeto `root_agent` é mantido para compatibilidade com a CLI e a interface de desenvolvimento do Google ADK.
-
-O orquestrador aceita o encaminhamento automático conforme a intenção da mensagem ou a indicação explícita do fluxo de triagem ou consulta documental. A integração dos agentes aos serviços de chat e ao processamento das mensagens recebidas será realizada nas entregas correspondentes.
-
-O modelo padrão dos agentes é `gemini-3.8-flash`, podendo ser alterado pela variável `GEMINI_AGENT_MODEL`. Consulte a [documentação da camada de agentes](../backend/api/agents/README.md) para conhecer os contratos de entrada e retorno.
-
-O serviço de documentos usa os adaptadores de `storage/` para gravar, abrir e excluir arquivos.
-
 ## Ambiente local
 
-Suba uma instância local do PostgreSQL separadamente enquanto o Compose e os Dockerfiles estão em preparação.
+### Execução com Docker Compose
+
+O Docker Compose disponibiliza o ambiente local completo, composto por:
+
+- PostgreSQL 16 com suporte a pgvector.
+- Backend FastAPI com os agentes de IA.
+- Frontend React.
+- Volumes persistentes para o banco de dados e o armazenamento documental.
+
+As migrações do Alembic são aplicadas automaticamente antes da inicialização da API.
+
+#### Pré-requisitos
+
+- Docker com Docker Compose v2.
+- Chave de API do Gemini Developer API.
+
+#### Configuração
+
+Na raiz do repositório, copie o arquivo de exemplo:
+
+```bash
+cp .env.example .env
+```
+
+Configure as variáveis no arquivo `.env`:
+
+| Variável | Uso |
+| --- | --- |
+| `POSTGRES_PASSWORD` | Senha do PostgreSQL local. |
+| `JWT_SECRET_KEY` | Chave utilizada para assinar e validar tokens JWT. |
+| `GOOGLE_API_KEY` | Chave de acesso ao Gemini Developer API. |
+| `GEMINI_AGENT_MODEL` | Modelo utilizado pelos agentes de IA. |
+
+Para o ambiente de demonstração, foi validado o modelo `gemini-3.1-flash-lite`.
+
+Utilize uma chave JWT aleatória e não versione o arquivo `.env`.
+
+#### Inicialização
+
+```bash
+docker compose up --build -d
+```
+
+Confira o estado dos serviços:
+
+```bash
+docker compose ps
+```
+
+| Serviço | Endereço |
+| --- | --- |
+| Frontend | http://localhost:5173 |
+| Backend | http://localhost:8000 |
+| Documentação da API | http://localhost:8000/docs |
+
+O PostgreSQL é acessível internamente pela rede do Compose, no serviço `db`, porta `5432`.
+
+#### Criação do usuário
+
+```bash
+docker compose exec backend python create_dev_user.py
+```
+
+Informe o e-mail e uma senha com pelo menos 12 caracteres. Utilize essas credenciais para acessar a aplicação.
+
+#### Carga da base Facepe
+
+Execute a carga operacional:
+
+```bash
+docker compose exec backend python scripts/load_facepe.py
+```
+
+Para processar os pedidos de demonstração e gerar os cartões de triagem:
+
+```bash
+docker compose exec backend python scripts/load_facepe_solicitations.py
+```
+
+A carga das solicitações utiliza os agentes reais e persiste os resultados no PostgreSQL.
+
+Consulte [Carga da base Facepe](carga-facepe.md) para conhecer os dados importados e os procedimentos de execução.
+
+#### Atualização e manutenção
+
+Para reconstruir os serviços após alterações no código:
+
+```bash
+docker compose up --build -d
+```
+
+Para acompanhar os logs:
+
+```bash
+docker compose logs -f backend
+```
+
+Para interromper e remover os containers:
+
+```bash
+docker compose down
+```
+
+Os volumes persistentes são preservados. Uma nova execução de `docker compose up -d` reutiliza os dados existentes.
+
+O comando `docker compose down -v` remove também os volumes, apagando os dados persistidos. Utilize-o somente quando for necessário reinicializar completamente o ambiente.
+
+### Execução sem Docker Compose
+
+Também é possível executar o frontend e o backend diretamente na máquina de desenvolvimento, utilizando uma instância PostgreSQL configurada separadamente.
 
 | Variável | Uso |
 | --- | --- |
 | `DATABASE_URL` | Conexão do backend e do Alembic com o PostgreSQL, no formato `postgresql+asyncpg://usuario:senha@localhost:5432/banco`. |
 | `JWT_SECRET_KEY` | Chave usada pela API para assinar e validar os tokens. |
-| `CORS_ALLOWED_ORIGINS` | Origens da SPA aceitas pela API, separadas por vírgulas. Em desenvolvimento, use a origem aberta no navegador, como `http://localhost:5173`. |
+| `CORS_ALLOWED_ORIGINS` | Origens da SPA aceitas pela API, separadas por vírgulas. |
 | `DOCUMENT_STORAGE_BACKEND` | Armazenamento de documentos. Aceita `local` (padrão) ou `gcs`. |
-| `DOCUMENT_STORAGE_DIR` | Diretório obrigatório no modo `local`. Caminhos relativos partem do diretório de execução da API. A primeira gravação cria o diretório se ele ainda estiver ausente. |
+| `DOCUMENT_STORAGE_DIR` | Diretório obrigatório no modo `local`. |
 | `DOCUMENT_STORAGE_BUCKET` | Nome do bucket privado, obrigatório no modo `gcs`. |
-| `DOCUMENT_UPLOAD_MAX_BYTES` | Limite do corpo multipart inteiro, em bytes. Aceita inteiros de 1 a 31.457.280. O padrão é 10.485.760 bytes (10 MiB). A API retorna HTTP `413` quando o corpo ultrapassa o limite. |
-| `GEMINI_AGENT_MODEL` | Modelo utilizado pelos agentes. O padrão é `gemini-3.8-flash`. Quando definida, a variável não pode ter valor vazio. |
-| `GOOGLE_GENAI_USE_ENTERPRISE` | Indicador de uso do ambiente Enterprise, reconhecido pela configuração dos agentes. |
-| `GOOGLE_GENAI_USE_VERTEXAI` | Indicador de uso do Vertex AI, reconhecido pela configuração dos agentes. |
-| `VITE_API_URL` | URL da API usada pela SPA. O padrão é `http://localhost:8000`. |
+| `DOCUMENT_UPLOAD_MAX_BYTES` | Limite do corpo multipart, em bytes. O padrão é 10 MiB e o máximo é 30 MiB. |
+| `GEMINI_AGENT_MODEL` | Modelo utilizado pelos agentes. |
+| `GOOGLE_API_KEY` | Chave de acesso ao Gemini Developer API. |
+| `GOOGLE_GENAI_USE_ENTERPRISE` | Indicador de uso do ambiente Enterprise. |
+| `GOOGLE_GENAI_USE_VERTEXAI` | Indicador de uso do Vertex AI. |
+| `VITE_API_URL` | URL da API utilizada pela SPA. O padrão é `http://localhost:8000`. |
 
-Em `backend/`, rode `uv sync`, aplique as migrações com `uv run alembic upgrade head` e suba a API com `uv run uvicorn api.app:app --reload`. Em `frontend/`, rode `npm ci` e `npm run dev`.
+Configure as variáveis do backend em `backend/.env` ou no ambiente do processo.
 
-Para utilizar a interface de desenvolvimento do Google ADK, configure o acesso ao modelo e execute `uv run adk web api` em `backend/`.
+Em `backend/`, execute:
 
-A configuração das credenciais dos agentes depende da modalidade de acesso ao Gemini. A Gemini Developer API utiliza uma chave de API, enquanto o Vertex AI utiliza Application Default Credentials (ADC), que podem ser configuradas localmente com `gcloud auth application-default login`. Utilize as variáveis de ambiente correspondentes à modalidade escolhida, sem misturar suas configurações.
+```bash
+uv sync
+uv run alembic upgrade head
+uv run uvicorn api.app:app --reload
+```
 
-Não inclua credenciais ou segredos em arquivos versionados. Consulte a seção de configuração dos agentes em [Infraestrutura](infra.md#configuração-dos-agentes).
+Em `frontend/`, execute:
 
-Quando um model mudar o esquema do banco, gere uma revisão em `backend/` com `uv run alembic revision --autogenerate -m "describe schema change"`. Confira as operações geradas, valide o `upgrade` e o `downgrade` em um banco descartável e inclua a migração no mesmo pull request do model.
+```bash
+npm ci
+npm run dev
+```
 
-## Verificações
+Para utilizar a interface de desenvolvimento do Google ADK, execute em `backend/`:
 
-- Em `backend/`, rode `uv run ruff check .` e `uv run pytest`. Os testes de integração que acessam PostgreSQL usam Testcontainers e precisam do Docker em execução.
-- Para rodar apenas a regressão de documentos, execute `uv run pytest tests/integration/routers/test_document_flow.py` em `backend/` com o Docker em execução. O teste aplica as migrações em um banco descartável, obtém o JWT pela rota de login e verifica o fluxo com armazenamento local. Ao final, valida o downgrade e reaplica a migração.
-- Em `frontend/`, rode `npm run lint`, `npm test` e `npm run build`. O build também verifica os tipos do TypeScript.
+```bash
+uv run adk web api
+```
 
-## Publicação
+A configuração das credenciais dos agentes depende da modalidade de acesso ao Gemini. O Gemini Developer API utiliza uma chave de API, enquanto o Vertex AI utiliza Application Default Credentials (ADC), que podem ser configuradas localmente com `gcloud auth application-default login`.
 
-Na nuvem, o build estático da SPA será publicado no Firebase Hosting. A API e os agentes serão publicados juntos no Cloud Run e usarão o PostgreSQL do Cloud SQL e o bucket privado do Cloud Storage.
+Não misture as configurações das modalidades de acesso nem inclua credenciais em arquivos versionados. Consulte [Infraestrutura](infra.md#configuração-dos-agentes).
 
-A imagem Docker do backend será construída localmente e armazenada no Artifact Registry. As migrações do Alembic serão executadas por meio do Cloud SQL Auth Proxy antes da publicação de uma nova revisão do backend, separadamente da inicialização dos contêineres.
+### Migrações
 
-O provisionamento, a publicação, as atualizações e o desprovisionamento serão automatizados por scripts Python utilizando as CLIs do Google Cloud e do Firebase. Os procedimentos de execução serão documentados junto aos scripts. Consulte [Infraestrutura](infra.md) para conhecer os serviços utilizados e as configurações do ambiente publicado.
+Quando um model alterar o esquema do banco, gere uma revisão em `backend/`:
 
-## Entrega por funcionalidade
+```bash
+uv run alembic revision --autogenerate -m "describe schema change"
+```
 
-Organize o trabalho por fluxo de uso. A issue descreve o resultado esperado e os critérios de aceitação. O pull request reúne as mudanças necessárias para executar e verificar aquele fluxo, incluindo migração, API e interface quando fizerem parte da entrega.
-
-O login foi a primeira entrega nesse formato. A migração cria `users`, `POST /auth/login` valida as credenciais e emite o JWT, e a tela abre `/chat` após o login. Para conferir o fluxo no navegador, cadastre um usuário de teste com `AuthService.hash_password()` e tente entrar com a senha correta e com a senha errada. A proteção de cada rota interna entra na entrega da funcionalidade que a usa. [US01](user-stories.md#us01---acessar-a-plataforma)
+Confira as operações geradas, valide o `upgrade` e o `downgrade` em um banco descartável e inclua a migração no mesmo pull request do model.
