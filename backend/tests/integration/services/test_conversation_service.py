@@ -39,13 +39,14 @@ from api.dependencies import (
     get_agent_orchestrator,
     get_document_source_provider,
     get_document_storage,
+    get_embedding_client,
     get_triage_origin_metadata_provider,
 )
 from api.models.chat_message import ChatMessageRole
 from api.models.chat_operation import ChatOperation, ChatOperationStatus
 from api.models.chat_session import ChatSession
 from api.models.citation import Citation
-from api.models.document import Document, DocumentChunk
+from api.models.document import Document
 from api.models.solicitation import (
     Solicitation,
     SolicitationStatus,
@@ -53,6 +54,7 @@ from api.models.solicitation import (
     SolicitationUrgency,
 )
 from api.models.user import User
+from api.rag import DeterministicHashEmbeddingClient, DocumentIndexingService
 from api.repositories.chat import ChatRepository
 from api.repositories.chat_operation import ChatOperationRepository
 from api.repositories.document import DocumentRepository
@@ -149,6 +151,9 @@ async def api_client(
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_embedding_client] = (
+        lambda: DeterministicHashEmbeddingClient(dimensions=128)
+    )
     transport = httpx.ASGITransport(app=app)
     try:
         async with httpx.AsyncClient(
@@ -233,6 +238,7 @@ async def test_free_chat_routes_through_orchestrate_request_persists_citations_a
     owner_id, owner_headers = await _create_user_headers(db_session)
     _, intruder_headers = await _create_user_headers(db_session)
 
+    embeddings = DeterministicHashEmbeddingClient(dimensions=128)
     storage = LocalDocumentStorage(tmp_path)
     stored_key = f"politica-{uuid4().hex}.txt"
     storage.save(stored_key, BytesIO(b"Clausula 4.2: prazo maximo de 48h uteis."))
@@ -241,13 +247,13 @@ async def test_free_chat_routes_through_orchestrate_request_persists_citations_a
         storage_key=stored_key,
     )
     db_session.add(doc)
-    await db_session.flush()
-    chunk = DocumentChunk(
-        document_id=doc.id,
-        content="Cláusula 4.2: prazo máximo de 48h úteis.",
-    )
-    db_session.add(chunk)
     await db_session.commit()
+    await DocumentIndexingService(
+        DocumentRepository(db_session),
+        storage,
+        embeddings,
+    ).index_document(doc.id)
+    chunk = (await DocumentRepository(db_session).list_chunks_by_document(doc.id))[0]
 
     captured_requests: list[OrchestratorRequest] = []
     fake_router = _FakeRunner(
@@ -278,6 +284,7 @@ async def test_free_chat_routes_through_orchestrate_request_persists_citations_a
         )
 
     app.dependency_overrides[get_document_storage] = lambda: storage
+    app.dependency_overrides[get_embedding_client] = lambda: embeddings
     app.dependency_overrides[get_agent_orchestrator] = lambda: simulated_orchestrator
 
     session_a = (await api_client.post("/chat/sessions", headers=owner_headers)).json()["id"]
@@ -382,6 +389,7 @@ async def test_free_chat_routes_through_orchestrate_request_persists_citations_a
 async def test_triage_ped_2026_003_in_november_preserves_oct_28_updates_card_and_supports_consultation(
     db_session: AsyncSession,
     api_client: httpx.AsyncClient,
+    tmp_path: Path,
 ) -> None:
     # Critérios 2, 3, 4 e 5 da #51:
     # - retoma PED-2026-003 em novembro de 2026 preservando 28/10/2026 de EntradaRecebida
@@ -468,18 +476,26 @@ async def test_triage_ped_2026_003_in_november_preserves_oct_28_updates_card_and
     assert len(captured_requests[0].history) == 2
 
     # Consulta documental dentro do chat da triagem NÃO sobrescreve o cartão
+    embeddings = DeterministicHashEmbeddingClient(dimensions=128)
+    storage = LocalDocumentStorage(tmp_path)
+    stored_key = f"test-triage-doc-{uuid4().hex}.txt"
+    storage.save(
+        stored_key,
+        BytesIO("Queijaria Cícero (P003): laudo sanitário vigente até 2027.".encode()),
+    )
     doc = Document(
         original_filename="cert_p003.txt",
-        storage_key=f"test-triage-doc-{uuid4().hex}",
+        storage_key=stored_key,
     )
     db_session.add(doc)
-    await db_session.flush()
-    chunk = DocumentChunk(
-        document_id=doc.id,
-        content="Queijaria Cícero (P003): laudo sanitário vigente até 2027.",
-    )
-    db_session.add(chunk)
     await db_session.commit()
+    await DocumentIndexingService(
+        DocumentRepository(db_session),
+        storage,
+        embeddings,
+    ).index_document(doc.id)
+    chunk = (await DocumentRepository(db_session).list_chunks_by_document(doc.id))[0]
+    app.dependency_overrides[get_embedding_client] = lambda: embeddings
 
     router_consult = _FakeRunner(
         ROUTER_OUTPUT_KEY,

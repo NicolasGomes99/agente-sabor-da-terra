@@ -34,7 +34,7 @@ async def run_alembic(*args: str) -> None:
 async def test_document_flow_on_migrated_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         database_url = postgres.get_connection_url(driver="asyncpg")
         monkeypatch.setenv("DATABASE_URL", database_url)
         monkeypatch.setenv("JWT_SECRET_KEY", "test-only-secret-key-for-document-regression")

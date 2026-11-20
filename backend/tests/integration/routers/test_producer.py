@@ -224,7 +224,7 @@ async def test_producer_routes_require_valid_token(
 
 async def test_producers_remain_available_after_app_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JWT_SECRET_KEY", TEST_SECRET_KEY)
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    with PostgresContainer("pgvector/pgvector:pg16") as postgres:
         url = postgres.get_connection_url(driver="asyncpg")
         monkeypatch.setenv("DATABASE_URL", url)
         await asyncio.to_thread(

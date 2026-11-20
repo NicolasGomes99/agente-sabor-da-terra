@@ -13,7 +13,8 @@ from api.agents import OrchestratorRequest, OrchestratorResponse
 from api.agents.consultation.schemas import ConsultationResponse
 from api.app import fastapi_app as app
 from api.database import get_db
-from api.dependencies import get_agent_orchestrator
+from api.dependencies import get_agent_orchestrator, get_embedding_client
+from api.rag import DeterministicHashEmbeddingClient
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
@@ -55,6 +56,9 @@ async def client(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_agent_orchestrator] = lambda: fake_orchestrator
+    app.dependency_overrides[get_embedding_client] = (
+        lambda: DeterministicHashEmbeddingClient(dimensions=128)
+    )
     transport = httpx.ASGITransport(app=app)
 
     try:
