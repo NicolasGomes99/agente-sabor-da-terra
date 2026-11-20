@@ -15,6 +15,7 @@ def valid_config(project_id: str = "test-sabor-da-terra") -> dict:
     return {
         "project_id": project_id,
         "region": "us-central1",
+        "billing_account_id": "XXXXXX-XXXXXX-XXXXXX",
         "database": {
             "instance_name": "sabor-da-terra-db",
             "database_name": "sabor_da_terra",
@@ -60,6 +61,38 @@ def test_validate_config_requires_unique_project_id(project_id: str) -> None:
     config = valid_config(project_id)
 
     with pytest.raises(common.InfraError, match="unique project_id"):
+        common.validate_config(config)
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["UPPERCASE", "has_underscore", "-leading", "trailing-", "ab", "toolong-project-id-toolong-project-id"],
+)
+def test_validate_config_rejects_invalid_project_id(project_id: str) -> None:
+    config = valid_config(project_id)
+
+    with pytest.raises(common.InfraError, match="valid Google Cloud Project ID"):
+        common.validate_config(config)
+
+
+def test_validate_config_accepts_valid_project_id() -> None:
+    common.validate_config(valid_config("test-sabor-da-terra"))
+
+
+def test_validate_config_requires_billing_account() -> None:
+    config = valid_config()
+    config["billing_account_id"] = ""
+
+    with pytest.raises(common.InfraError, match="billing_account_id"):
+        common.validate_config(config)
+
+
+@pytest.mark.parametrize("amount", [0, -1, "1"])
+def test_validate_config_rejects_invalid_budget_amount(amount) -> None:
+    config = valid_config()
+    config["budget"]["amount_usd"] = amount
+
+    with pytest.raises(common.InfraError, match="amount_usd"):
         common.validate_config(config)
 
 
