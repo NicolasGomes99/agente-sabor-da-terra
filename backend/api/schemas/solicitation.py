@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -36,3 +37,11 @@ class SolicitationSessionOut(SolicitationOut):
     created_at: datetime
     read_only: bool
     messages: list[MessageOut]
+
+
+class SolicitationTurnOut(BaseModel):
+    operation_id: str
+    selected_flow: Literal["triage", "consultation"]
+    user_message: MessageOut
+    assistant_message: MessageOut
+    solicitation: SolicitationOut

@@ -9,9 +9,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api import database
+from api.agents import OrchestratorRequest, OrchestratorResponse
+from api.agents.consultation.schemas import ConsultationResponse
 from api.app import fastapi_app as app
 from api.database import get_db
-from api.dependencies import get_document_storage
+from api.dependencies import get_agent_orchestrator, get_document_storage
 from api.models.chat_message import ChatMessageRole
 from api.models.document import Document, DocumentChunk
 from api.repositories.chat import ChatRepository
@@ -39,7 +41,24 @@ async def client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
+    async def fake_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="consultation",
+            selected_agent="consultation_agent",
+            result=ConsultationResponse(
+                answer=f"Resposta simulada para: {request.message_text}",
+                reference_date_used="2026-11-19",
+                source_ids=[],
+                cited_sources=[],
+                has_sufficient_data=False,
+            ),
+        )
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_agent_orchestrator] = lambda: fake_orchestrator
     transport = httpx.ASGITransport(app=app)
 
     try:
@@ -83,12 +102,20 @@ async def test_create_session_and_register_message(
         json={"content": "Quais pedidos estão pendentes?"},
     )
     assert sent.status_code == 201
-    assert sent.json()["content"] == "Quais pedidos estão pendentes?"
-    assert sent.json()["role"] == "user"
+    body = sent.json()
+    assert body["selected_flow"] == "consultation"
+    assert body["user_message"]["content"] == "Quais pedidos estão pendentes?"
+    assert body["user_message"]["role"] == "user"
+    assert body["assistant_message"]["role"] == "assistant"
+    assert "Quais pedidos estão pendentes?" in body["assistant_message"]["content"]
     assert await db_session.scalar(
         text("SELECT role FROM chat_messages WHERE id = :id"),
-        {"id": UUID(sent.json()["id"])},
+        {"id": UUID(body["user_message"]["id"])},
     ) == "USER"
+    assert await db_session.scalar(
+        text("SELECT role FROM chat_messages WHERE id = :id"),
+        {"id": UUID(body["assistant_message"]["id"])},
+    ) == "AGENT"
 
 
 @pytest.mark.asyncio
@@ -114,9 +141,21 @@ async def test_reopen_session_returns_messages_in_order(
     messages = response.json()["messages"]
     contents = [m["content"] for m in messages]
     positions = [m["position"] for m in messages]
-    assert contents == ["primeira", "segunda", "terceira"]
-    assert positions == [1, 2, 3]
-    assert [message["role"] for message in messages] == ["user", "user", "assistant"]
+    assert contents == [
+        "primeira",
+        "Resposta simulada para: primeira",
+        "segunda",
+        "Resposta simulada para: segunda",
+        "terceira",
+    ]
+    assert positions == [1, 2, 3, 4, 5]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "assistant",
+    ]
 
 
 @pytest.mark.asyncio
@@ -141,7 +180,7 @@ async def test_session_shows_only_its_own_messages(
     response = await client.get(f"/chat/sessions/{session_a}", headers=headers)
 
     contents = [m["content"] for m in response.json()["messages"]]
-    assert contents == ["mensagem da A"]
+    assert contents == ["mensagem da A", "Resposta simulada para: mensagem da A"]
 
 
 @pytest.mark.asyncio
@@ -264,7 +303,8 @@ async def test_new_message_has_empty_citations(
     )
 
     assert sent.status_code == 201
-    assert sent.json()["citations"] == []
+    assert sent.json()["user_message"]["citations"] == []
+    assert sent.json()["assistant_message"]["citations"] == []
 
 
 @pytest.mark.asyncio

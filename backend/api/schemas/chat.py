@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -16,6 +16,8 @@ from ..models.chat_message import ChatMessageRole
 
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    operation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    retry: bool = False
 
     @field_validator("content")
     @classmethod
@@ -23,6 +25,16 @@ class MessageCreate(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("Message content must not be blank.")
+        return stripped
+
+    @field_validator("operation_id")
+    @classmethod
+    def validate_operation_id_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("operation_id must not be blank.")
         return stripped
 
 
@@ -105,3 +117,10 @@ class SessionOut(BaseModel):
 
 class SessionDetail(SessionOut):
     messages: list[MessageOut]
+
+
+class ChatTurnOut(BaseModel):
+    operation_id: str
+    selected_flow: Literal["triage", "consultation"]
+    user_message: MessageOut
+    assistant_message: MessageOut

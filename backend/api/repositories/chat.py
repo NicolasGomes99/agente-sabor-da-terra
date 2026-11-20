@@ -97,8 +97,20 @@ class ChatRepository:
             statement = statement.with_for_update(of=ChatSession)
         return await self.session.scalar(statement)
 
-    async def get_session_by_id(self, session_id: UUID) -> ChatSession | None:
-        return await self.session.get(ChatSession, session_id)
+    async def get_session_by_id(
+        self,
+        session_id: UUID,
+        *,
+        lock: bool = False,
+    ) -> ChatSession | None:
+        statement = (
+            select(ChatSession)
+            .where(ChatSession.id == session_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock:
+            statement = statement.with_for_update(of=ChatSession)
+        return await self.session.scalar(statement)
 
     async def add_message(
         self,

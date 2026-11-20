@@ -9,8 +9,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api import database
+from api.agents import OrchestratorRequest, OrchestratorResponse
+from api.agents.consultation.schemas import ConsultationResponse
 from api.app import fastapi_app as app
 from api.database import get_db
+from api.dependencies import get_agent_orchestrator
 from api.repositories.user import UserRepository
 from api.services.auth import AuthService
 from api.services.user import UserService
@@ -34,7 +37,24 @@ async def client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db_session
 
+    async def fake_orchestrator(
+        request: OrchestratorRequest,
+    ) -> OrchestratorResponse:
+        return OrchestratorResponse(
+            session_id=request.session_id,
+            selected_flow="consultation",
+            selected_agent="consultation_agent",
+            result=ConsultationResponse(
+                answer=f"Resposta simulada para: {request.message_text}",
+                reference_date_used="2026-11-19",
+                source_ids=[],
+                cited_sources=[],
+                has_sufficient_data=False,
+            ),
+        )
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_agent_orchestrator] = lambda: fake_orchestrator
     transport = httpx.ASGITransport(app=app)
 
     try:
@@ -335,7 +355,10 @@ async def test_open_session_transitions_to_review_and_shares_clarifications(
         json={"content": "Confirmado com o comprador por telefone."},
     )
     assert clarification.status_code == 201
-    assert clarification.json()["role"] == "user"
+    turn_body = clarification.json()
+    assert turn_body["user_message"]["role"] == "user"
+    assert turn_body["assistant_message"]["role"] == "assistant"
+    assert turn_body["solicitation"]["status"] == "em_analise"
 
     shared = await client.post(
         f"/solicitations/{created['id']}/open",
@@ -347,6 +370,7 @@ async def test_open_session_transitions_to_review_and_shares_clarifications(
         "Mensagem original de PED-2026-016",
         analysis_content,
         "Confirmado com o comprador por telefone.",
+        "Resposta simulada para: Confirmado com o comprador por telefone.",
     ]
     assert shared.json()["status"] == "em_analise"
 
